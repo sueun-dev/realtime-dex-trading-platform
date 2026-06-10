@@ -61,8 +61,11 @@ export default function App() {
       .filter((t): t is NonNullable<typeof t> => t !== null && t !== undefined && isTickerWire(t))
       .map(parseTicker);
     if (seeded.length > 0) store.setTickers(seeded);
-    if (store.byId[store.selectedId] === undefined && wires.length > 0) {
-      store.selectMarket(wires[0]!.id);
+    // re-read the store: `store` is the snapshot from BEFORE setMarkets ran,
+    // so its byId would always be empty on first load and clobber the default
+    const fresh = useMarketStore.getState();
+    if (fresh.byId[fresh.selectedId] === undefined && wires.length > 0) {
+      fresh.selectMarket(wires[0]!.id);
     }
   }, [marketsQuery.data]);
 
