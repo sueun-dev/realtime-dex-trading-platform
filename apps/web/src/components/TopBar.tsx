@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { koMessage } from '../lib/api.js';
 import { useAuthStore } from '../lib/auth.js';
 import { getWs } from '../lib/ws.js';
@@ -15,6 +15,18 @@ export function TopBar() {
   const [connecting, setConnecting] = useState(false);
 
   const changeCls = ticker === undefined ? '' : ticker.change24h > 0n ? 'pos' : ticker.change24h < 0n ? 'neg' : '';
+
+  // flash the price green/red on every tick
+  const prevPrice = useRef<bigint | null>(null);
+  const [tickCls, setTickCls] = useState('');
+  useEffect(() => {
+    if (ticker === undefined) return;
+    const prev = prevPrice.current;
+    prevPrice.current = ticker.price;
+    if (prev !== null && ticker.price !== prev) {
+      setTickCls(ticker.price > prev ? 'tick-up' : 'tick-down');
+    }
+  }, [ticker]);
 
   const onWallet = async (): Promise<void> => {
     if (address !== null) return;
@@ -41,7 +53,9 @@ export function TopBar() {
         </span>
         {market !== undefined && ticker !== undefined && (
           <>
-            <span className={`market-price ${changeCls}`}>{formatPrice(ticker.price, market.tickSize)}</span>
+            <span key={ticker.ts} className={`market-price ${changeCls} ${tickCls}`}>
+              {formatPrice(ticker.price, market.tickSize)}
+            </span>
             <span className={`market-change ${changeCls}`}>{formatPct(ticker.change24h)}</span>
           </>
         )}
@@ -73,7 +87,7 @@ export function TopBar() {
 
       <button
         type="button"
-        className="wallet-btn"
+        className={`wallet-btn ${address !== null ? 'connected' : ''}`}
         disabled={connecting}
         onClick={() => {
           void onWallet();
