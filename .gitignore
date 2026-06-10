@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.pglite-data/
+coverage/
+.env
+.env.local
+playwright-report/
+test-results/
+apps/web/dist/

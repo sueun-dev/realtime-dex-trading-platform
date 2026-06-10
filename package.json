@@ -1,0 +1,22 @@
+{
+  "name": "dex-exchange",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Hyperliquid-style DEX with real Korean (Upbit) spot markets and real Hyperliquid perp markets",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' --filter './apps/*' run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r --filter './packages/*' --filter './apps/api' run test",
+    "test:live": "pnpm -r run test:live",
+    "test:e2e": "pnpm --filter @dex/e2e run test",
+    "dev:api": "pnpm --filter @dex/api run dev",
+    "dev:web": "pnpm --filter @dex/web run dev"
+  }
+}
