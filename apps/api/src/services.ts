@@ -32,7 +32,17 @@ export interface ServiceOptions {
   funding?: boolean;
   jwtSecret?: string;
   perpTopN?: number;
+  /** HTTP rate limiting (per IP); false = disabled (default, for tests) */
+  rateLimit?: RateLimitConfig | false;
   log?: (msg: string) => void;
+}
+
+export interface RateLimitConfig {
+  /** global requests per window */
+  max: number;
+  windowSec: number;
+  /** stricter cap for /api/auth/* within a 1-minute window */
+  authMax?: number;
 }
 
 export interface Services {
@@ -47,6 +57,7 @@ export interface Services {
   candles: CandleService;
   upbit: UpbitRest;
   hl: HyperliquidRest;
+  rateLimit: RateLimitConfig | false;
   log: (msg: string) => void;
   stop(): Promise<void>;
 }
@@ -123,6 +134,7 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
     candles,
     upbit,
     hl,
+    rateLimit: opts.rateLimit ?? false,
     log,
     async stop() {
       for (const s of stoppables) s.stop();

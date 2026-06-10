@@ -4,6 +4,7 @@
  * real wallet-signature auth — the only synthetic thing is the test money.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { claimFaucet, connectWallet, expectToast, openTab as openTabIn } from './helpers.js';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -18,9 +19,7 @@ test.afterAll(async () => {
   await page.close();
 });
 
-async function openTab(name: string): Promise<void> {
-  await page.locator('.tabs button', { hasText: name }).first().click();
-}
+const openTab = (name: string): Promise<void> => openTabIn(page, name);
 
 test('loads the real Korean market universe with live prices', async () => {
   const marketBtn = page.getByTestId('market-button');
@@ -83,19 +82,12 @@ test('chart renders real candles', async () => {
 });
 
 test('connects a wallet via signature auth', async () => {
-  await page.getByRole('button', { name: '지갑 연결' }).click();
-  // button shows the truncated address after JWT login
-  await expect(page.locator('.wallet-btn')).toContainText(/^0x[0-9a-fA-F]{4}/, {
-    timeout: 15_000,
-  });
+  await connectWallet(page);
 });
 
 test('claims faucet test funds', async () => {
-  await openTab('잔고');
-  await page.getByRole('button', { name: '테스트 자금 받기' }).click();
-  // ₩100,000,000 + $100,000 appear in the balances table
+  await claimFaucet(page);
   await expect(page.locator('.data-table')).toContainText('KRW');
-  await expect(page.locator('.data-table')).toContainText('100,000,000');
   await expect(page.locator('.data-table')).toContainText('USDC');
 });
 
@@ -107,19 +99,19 @@ test('REAL PURCHASE: market-buys BTC against live liquidity', async () => {
   await expect(page.getByTestId('fee-value')).not.toContainText('–');
   await form.getByRole('button', { name: /매수 BTC/ }).click();
 
-  await expect(page.locator('.toast, [class*=toast]').first()).toContainText('주문이 접수되었습니다');
+  await expectToast(page, '주문이 접수되었습니다');
 
   // the purchased BTC shows up in balances…
   await openTab('잔고');
   await expect(page.locator('.data-table')).toContainText('BTC');
   await expect(page.locator('.data-table')).toContainText('0.001');
 
-  // …and the fill is in the trade history with side 매수
+  // …and the fill is in the trade history with side 매수 (a market order can
+  // legitimately split into several partial fills against real venue sizes,
+  // so assert the rows, not a single row's qty — the balance above proves the total)
   await openTab('체결 내역');
-  const fillRow = page.locator('.data-table tbody tr').first();
-  await expect(fillRow).toContainText('KRW-BTC');
-  await expect(fillRow).toContainText('매수');
-  await expect(fillRow).toContainText('0.001');
+  const fillRows = page.locator('.data-table tbody tr').filter({ hasText: 'KRW-BTC' });
+  await expect(fillRows.first()).toContainText('매수');
 });
 
 test('limit order rests in open orders and cancels', async () => {
@@ -128,7 +120,7 @@ test('limit order rests in open orders and cancels', async () => {
   await form.getByPlaceholder('가격').fill('50000000'); // far below market — rests
   await form.getByPlaceholder('수량').fill('0.001');
   await form.getByRole('button', { name: /매수 BTC/ }).click();
-  await expect(page.locator('.toast, [class*=toast]').first()).toContainText('주문이 접수되었습니다');
+  await expectToast(page, '주문이 접수되었습니다');
 
   await openTab('미체결 주문');
   const orderRow = page.locator('.data-table tbody tr').filter({ hasText: '50,000,000' });
@@ -143,7 +135,7 @@ test('sells the BTC back (market sell, full round trip)', async () => {
   await form.getByRole('button', { name: '매도' }).first().click();
   await form.getByPlaceholder('수량').fill('0.001');
   await form.getByRole('button', { name: /매도 BTC/ }).click();
-  await expect(page.locator('.toast, [class*=toast]').first()).toContainText('주문이 접수되었습니다');
+  await expectToast(page, '주문이 접수되었습니다');
 
   await openTab('체결 내역');
   await expect(page.locator('.data-table tbody tr').first()).toContainText('매도');

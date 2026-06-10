@@ -1,12 +1,10 @@
-import { EventEmitter } from 'node:events';
-import WebSocket from 'ws';
+import type WebSocket from 'ws';
 import type { BookLevel, Side } from '@dex/shared';
+import { ReconnectingWs } from './reconnectingWs.js';
 import { expectArray, expectNumber, expectObject, expectString, numToUnits } from './util.js';
 
 export const HYPERLIQUID_WS_URL = 'wss://api.hyperliquid.xyz/ws';
 
-const BACKOFF_BASE_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
 const PING_INTERVAL_MS = 30_000;
 
 export interface HlTrade {
@@ -47,135 +45,50 @@ export interface HyperliquidWsOptions {
  * Auto-reconnects with capped exponential backoff (1s,2s,4s..30s) and
  * resubscribes; sends {"method":"ping"} every 30s. `close()` is final.
  */
-export class HyperliquidWs extends EventEmitter {
-  readonly #url: string;
+export class HyperliquidWs extends ReconnectingWs {
   #tradeCoins: Set<string>;
   #l2Coins: Set<string>;
-  #ws: WebSocket | null = null;
-  #closed = false;
-  #attempts = 0;
-  #reconnectTimer: NodeJS.Timeout | null = null;
-  #pingTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: HyperliquidWsOptions = {}) {
-    super();
-    this.#url = opts.url ?? HYPERLIQUID_WS_URL;
+    super(opts.url ?? HYPERLIQUID_WS_URL, { pingMs: PING_INTERVAL_MS });
     this.#tradeCoins = new Set(opts.tradeCoins ?? []);
     this.#l2Coins = new Set(opts.l2Coins ?? []);
   }
 
-  #send(method: 'subscribe' | 'unsubscribe', subscription: Record<string, string>): void {
-    if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(JSON.stringify({ method, subscription }));
-    }
+  /** Hyperliquid keepalive is an application-level JSON frame. */
+  protected override sendPing(ws: WebSocket): void {
+    ws.send(JSON.stringify({ method: 'ping' }));
+  }
+
+  #sub(method: 'subscribe' | 'unsubscribe', subscription: Record<string, string>): void {
+    this.sendJson({ method, subscription });
   }
 
   setL2Coins(coins: string[]): void {
     const next = new Set(coins);
-    for (const c of this.#l2Coins) if (!next.has(c)) this.#send('unsubscribe', { type: 'l2Book', coin: c });
-    for (const c of next) if (!this.#l2Coins.has(c)) this.#send('subscribe', { type: 'l2Book', coin: c });
+    for (const c of this.#l2Coins) if (!next.has(c)) this.#sub('unsubscribe', { type: 'l2Book', coin: c });
+    for (const c of next) if (!this.#l2Coins.has(c)) this.#sub('subscribe', { type: 'l2Book', coin: c });
     this.#l2Coins = next;
   }
 
   setTradeCoins(coins: string[]): void {
     const next = new Set(coins);
-    for (const c of this.#tradeCoins) if (!next.has(c)) this.#send('unsubscribe', { type: 'trades', coin: c });
-    for (const c of next) if (!this.#tradeCoins.has(c)) this.#send('subscribe', { type: 'trades', coin: c });
+    for (const c of this.#tradeCoins) if (!next.has(c)) this.#sub('unsubscribe', { type: 'trades', coin: c });
+    for (const c of next) if (!this.#tradeCoins.has(c)) this.#sub('subscribe', { type: 'trades', coin: c });
     this.#tradeCoins = next;
   }
 
-  connect(): void {
-    if (this.#closed || this.#ws) return;
-    const ws = new WebSocket(this.#url);
-    this.#ws = ws;
-
-    ws.on('open', () => {
-      this.#attempts = 0;
-      ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids' } }));
-      for (const coin of this.#tradeCoins) {
-        ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'trades', coin } }));
-      }
-      for (const coin of this.#l2Coins) {
-        ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'l2Book', coin } }));
-      }
-      this.#startPing(ws);
-      this.emit('open');
-    });
-
-    ws.on('message', (data: WebSocket.RawData) => {
-      try {
-        this.#handleMessage(data);
-      } catch (err) {
-        this.#emitError(err as Error);
-      }
-    });
-
-    ws.on('error', (err: Error) => {
-      this.#emitError(err);
-    });
-
-    ws.on('close', () => {
-      this.#stopPing();
-      this.#ws = null;
-      this.emit('close');
-      this.#scheduleReconnect();
-    });
-  }
-
-  close(): void {
-    this.#closed = true;
-    this.#stopPing();
-    if (this.#reconnectTimer) {
-      clearTimeout(this.#reconnectTimer);
-      this.#reconnectTimer = null;
+  protected override onSocketOpen(ws: WebSocket): void {
+    ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids' } }));
+    for (const coin of this.#tradeCoins) {
+      ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'trades', coin } }));
     }
-    if (this.#ws) {
-      this.#ws.removeAllListeners('close');
-      this.#ws.once('error', () => {
-        /* swallow teardown errors */
-      });
-      this.#ws.terminate();
-      this.#ws = null;
+    for (const coin of this.#l2Coins) {
+      ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'l2Book', coin } }));
     }
   }
 
-  #startPing(ws: WebSocket): void {
-    this.#stopPing();
-    this.#pingTimer = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ method: 'ping' }));
-      }
-    }, PING_INTERVAL_MS);
-    this.#pingTimer.unref?.();
-  }
-
-  #stopPing(): void {
-    if (this.#pingTimer) {
-      clearInterval(this.#pingTimer);
-      this.#pingTimer = null;
-    }
-  }
-
-  #scheduleReconnect(): void {
-    if (this.#closed || this.#reconnectTimer) return;
-    const delay = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** this.#attempts);
-    this.#attempts += 1;
-    this.#reconnectTimer = setTimeout(() => {
-      this.#reconnectTimer = null;
-      this.connect();
-    }, delay);
-  }
-
-  #emitError(err: Error): void {
-    if (this.listenerCount('wsError') > 0) this.emit('wsError', err);
-  }
-
-  #handleMessage(data: WebSocket.RawData): void {
-    const text = Buffer.isBuffer(data)
-      ? data.toString('utf8')
-      : Array.isArray(data)
-        ? Buffer.concat(data).toString('utf8')
-        : Buffer.from(data).toString('utf8');
+  protected override handleText(text: string): void {
     const msg = JSON.parse(text) as Record<string, unknown>;
     const channel = msg['channel'];
     if (channel === 'allMids') {

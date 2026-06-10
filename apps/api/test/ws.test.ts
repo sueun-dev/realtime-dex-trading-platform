@@ -197,21 +197,27 @@ describe('websocket hub', () => {
     late.close();
   });
 
-  it('survives a garbage/flood storm and keeps serving', async () => {
+  it('kicks a flooding client and keeps serving everyone else', async () => {
     const probe = new WsProbe(base);
     await probe.ready();
+    const kicked = new Promise<void>((resolve) => probe.ws.on('close', () => resolve()));
+    // 2000 junk frames blows straight through the 300-frame burst budget
     for (let i = 0; i < 500; i++) {
       probe.ws.send('not json at all {{{');
       probe.send({ op: 'subscribe' }); // missing channel
       probe.send({ op: 'auth', token: 12345 }); // wrong type
       probe.send({ nonsense: true });
     }
-    probe.send({ op: 'subscribe', channel: `orderbook:${M}`, market: M });
-    // still alive and serving snapshots after 2000 junk frames
-    await probe.waitFor((f) => f.channel === `orderbook:${M}`);
+    await kicked;
+
+    // a well-behaved client connects fine right after
+    const fresh = new WsProbe(base);
+    await fresh.ready();
+    fresh.send({ op: 'subscribe', channel: `orderbook:${M}`, market: M });
+    await fresh.waitFor((f) => f.channel === `orderbook:${M}`);
     const health = await t.app.inject({ method: 'GET', url: '/api/health' });
     expect(health.statusCode).toBe(200);
-    probe.close();
+    fresh.close();
   });
 
   it('unauthenticated sockets never receive user frames', async () => {

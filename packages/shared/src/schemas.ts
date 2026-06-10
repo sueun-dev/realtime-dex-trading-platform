@@ -3,7 +3,7 @@
  * these schemas validate + convert to engine-native bigint units.
  */
 import { z } from 'zod';
-import { toUnits } from './decimal.js';
+import { fromUnits, toUnits } from './decimal.js';
 import type { OrderRequest } from './types.js';
 
 /** positive decimal-string → 1e8 bigint units */
@@ -85,10 +85,7 @@ export const zAuthVerifyRequest = z.object({
 
 /** Recursively converts bigint fields to decimal strings for JSON responses. */
 export function jsonSafe<T>(value: T): unknown {
-  if (typeof value === 'bigint') {
-    // re-import would create a cycle at type level; inline fromUnits behavior
-    return bigintToDecimalString(value);
-  }
+  if (typeof value === 'bigint') return fromUnits(value);
   if (Array.isArray(value)) return value.map(jsonSafe);
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
@@ -98,14 +95,4 @@ export function jsonSafe<T>(value: T): unknown {
     return out;
   }
   return value;
-}
-
-function bigintToDecimalString(units: bigint): string {
-  const SCALE = 10n ** 8n;
-  const neg = units < 0n;
-  const abs = neg ? -units : units;
-  const intPart = abs / SCALE;
-  const frac = (abs % SCALE).toString().padStart(8, '0').replace(/0+$/, '');
-  const s = frac.length > 0 ? `${intPart}.${frac}` : intPart.toString();
-  return neg ? `-${s}` : s;
 }

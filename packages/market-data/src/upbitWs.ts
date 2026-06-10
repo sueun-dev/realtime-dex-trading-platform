@@ -1,5 +1,5 @@
-import { EventEmitter } from 'node:events';
-import WebSocket from 'ws';
+import type WebSocket from 'ws';
+import { ReconnectingWs } from './reconnectingWs.js';
 import type { BookLevel, Side, Ticker } from '@dex/shared';
 import type { PublicTrade } from './upbit.js';
 import {
@@ -97,9 +97,6 @@ export function parseUpbitWsFrame(text: string): UpbitWsFrame {
   return { kind: 'other' }; // status/keepalive frames
 }
 
-const BACKOFF_BASE_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
-
 export type UpbitWsType = 'ticker' | 'trade' | 'orderbook';
 
 export interface UpbitWsOptions {
@@ -108,31 +105,24 @@ export interface UpbitWsOptions {
   types?: UpbitWsType[];
 }
 
+/** keepalive: Upbit drops idle sockets — protocol-level ping every 60s */
+const UPBIT_PING_MS = 60_000;
+
 /**
  * Upbit public websocket: subscribes the configured frame types for the given
- * codes. Emits:
- *  - 'ticker' (Ticker)
- *  - 'trade' (PublicTrade)
- *  - 'orderbook' (ExternalOrderbook) — real venue depth, prices AND sizes
- *  - 'open' / 'close' / 'wsError' (Error) — informational
- * Auto-reconnects with capped exponential backoff and resubscribes.
- * `setCodes()` re-sends the subscription live (Upbit replaces subscriptions
- * on the same socket). `close()` is final: no further reconnects.
+ * codes. Emits 'ticker' (Ticker), 'trade' (PublicTrade), 'orderbook'
+ * (ExternalOrderbook — real venue depth) plus the ReconnectingWs lifecycle
+ * events. `setCodes()` re-sends the subscription live (Upbit replaces
+ * subscriptions on the same socket).
  */
-export class UpbitWs extends EventEmitter {
+export class UpbitWs extends ReconnectingWs {
   #codes: string[];
   readonly #types: UpbitWsType[];
-  readonly #url: string;
-  #ws: WebSocket | null = null;
-  #closed = false;
-  #attempts = 0;
-  #reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(codes: string[], opts: UpbitWsOptions = {}) {
-    super();
+    super(opts.url ?? UPBIT_WS_URL, { pingMs: UPBIT_PING_MS });
     this.#codes = [...codes];
     this.#types = opts.types ?? ['ticker', 'trade'];
-    this.#url = opts.url ?? UPBIT_WS_URL;
   }
 
   /** Replace the subscribed code set; takes effect immediately when connected. */
@@ -140,90 +130,22 @@ export class UpbitWs extends EventEmitter {
     const next = [...codes];
     if (next.length === this.#codes.length && next.every((c, i) => c === this.#codes[i])) return;
     this.#codes = next;
-    if (this.#ws?.readyState === WebSocket.OPEN && next.length > 0) {
-      this.#ws.send(this.#subscribeFrame());
-    }
+    if (next.length > 0) this.sendJson(this.#subscription());
   }
 
   get codes(): string[] {
     return [...this.#codes];
   }
 
-  #subscribeFrame(): string {
-    return JSON.stringify([
-      { ticket: 'dex' },
-      ...this.#types.map((type) => ({ type, codes: this.#codes })),
-    ]);
+  #subscription(): unknown[] {
+    return [{ ticket: 'dex' }, ...this.#types.map((type) => ({ type, codes: this.#codes }))];
   }
 
-  connect(): void {
-    if (this.#closed || this.#ws) return;
-    const ws = new WebSocket(this.#url);
-    this.#ws = ws;
-
-    ws.on('open', () => {
-      this.#attempts = 0;
-      if (this.#codes.length > 0) ws.send(this.#subscribeFrame());
-      this.emit('open');
-    });
-
-    ws.on('message', (data: WebSocket.RawData) => {
-      try {
-        this.#handleMessage(data);
-      } catch (err) {
-        this.#emitError(err as Error);
-      }
-    });
-
-    ws.on('error', (err: Error) => {
-      this.#emitError(err);
-    });
-
-    ws.on('close', () => {
-      this.#ws = null;
-      this.emit('close');
-      this.#scheduleReconnect();
-    });
+  protected override onSocketOpen(ws: WebSocket): void {
+    if (this.#codes.length > 0) ws.send(JSON.stringify(this.#subscription()));
   }
 
-  close(): void {
-    this.#closed = true;
-    if (this.#reconnectTimer) {
-      clearTimeout(this.#reconnectTimer);
-      this.#reconnectTimer = null;
-    }
-    if (this.#ws) {
-      this.#ws.removeAllListeners('close');
-      this.#ws.once('error', () => {
-        /* swallow teardown errors */
-      });
-      this.#ws.terminate();
-      this.#ws = null;
-    }
-  }
-
-  #scheduleReconnect(): void {
-    if (this.#closed || this.#reconnectTimer) return;
-    const delay = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** this.#attempts);
-    this.#attempts += 1;
-    this.#reconnectTimer = setTimeout(() => {
-      this.#reconnectTimer = null;
-      this.connect();
-    }, delay);
-  }
-
-  #emitError(err: Error): void {
-    // 'error' with no listener crashes the process — only emit when someone listens.
-    if (this.listenerCount('wsError') > 0) this.emit('wsError', err);
-  }
-
-  #handleMessage(data: WebSocket.RawData): void {
-    // Upbit sends binary frames containing UTF-8 JSON.
-    const text = Buffer.isBuffer(data)
-      ? data.toString('utf8')
-      : Array.isArray(data)
-        ? Buffer.concat(data).toString('utf8')
-        : Buffer.from(data).toString('utf8');
+  protected override handleText(text: string): void {
     const frame = parseUpbitWsFrame(text); // throws on malformed frames → wsError
     if (frame.kind === 'ticker') this.emit('ticker', frame.ticker);
     else if (frame.kind === 'trade') this.emit('trade', frame.trade);

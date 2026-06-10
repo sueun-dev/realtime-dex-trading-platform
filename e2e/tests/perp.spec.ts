@@ -4,6 +4,7 @@
  * Plus: proof that the spot orderbook moves by itself (it's the live venue).
  */
 import { expect, test, type Page } from '@playwright/test';
+import { claimFaucet, connectWallet, expectToast, openTab as openTabIn } from './helpers.js';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -18,9 +19,7 @@ test.afterAll(async () => {
   await page.close();
 });
 
-async function openTab(name: string): Promise<void> {
-  await page.locator('.tabs button', { hasText: name }).first().click();
-}
+const openTab = (name: string): Promise<void> => openTabIn(page, name);
 
 test('the KRW-BTC orderbook moves on its own (it is the live venue book)', async () => {
   await expect(page.getByTestId('ask-row-0')).toBeVisible();
@@ -54,12 +53,9 @@ test('switches to BTC-PERP via the selector', async () => {
 });
 
 test('connects wallet and claims faucet', async () => {
-  await page.getByRole('button', { name: '지갑 연결' }).click();
-  await expect(page.locator('.wallet-btn')).toContainText(/^0x/, { timeout: 15_000 });
-  await openTab('잔고');
-  await page.getByRole('button', { name: '테스트 자금 받기' }).click();
+  await connectWallet(page);
+  await claimFaucet(page);
   await expect(page.locator('.data-table')).toContainText('USDC');
-  await expect(page.locator('.data-table')).toContainText('100,000');
 });
 
 test('opens a 5x long with a market order against the real perp book', async () => {
@@ -72,7 +68,7 @@ test('opens a 5x long with a market order against the real perp book', async () 
   await form.getByPlaceholder('수량').fill('0.01');
   await expect(page.getByTestId('margin-value')).not.toContainText('–');
   await form.getByRole('button', { name: /매수 BTC/ }).click();
-  await expect(page.locator('.toast, [class*=toast]').first()).toContainText('주문이 접수되었습니다');
+  await expectToast(page, '주문이 접수되었습니다');
 
   await openTab('포지션');
   const row = page.locator('.data-table tbody tr').filter({ hasText: 'BTC-PERP' });

@@ -16,6 +16,8 @@ async function main(): Promise<void> {
     feeds: true,
     marketMaker: true,
     funding: true,
+    // generous enough for an active trader, hostile to scrapers/bots
+    rateLimit: { max: 600, windowSec: 60, authMax: 30 },
   });
   const app = await buildApp(services);
   await app.listen({ port: PORT, host: HOST });

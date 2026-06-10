@@ -21,7 +21,16 @@ interface Conn {
   socket: HubSocket;
   channels: Set<string>;
   userId: string | null;
+  /** flood protection: token bucket refilled lazily */
+  tokens: number;
+  lastRefill: number;
 }
+
+/** per-connection message budget: burst of 300, refilling 50/s */
+const MSG_BURST = 300;
+const MSG_PER_SEC = 50;
+/** a single client may watch at most this many channels */
+const MAX_CHANNELS = 100;
 
 const BOOK_DEPTH = 20;
 const BOOK_FLUSH_MS = 80;
@@ -54,9 +63,21 @@ export class WsHub implements EventSink {
   }
 
   register(socket: HubSocket): void {
-    const conn: Conn = { socket, channels: new Set(), userId: null };
+    const conn: Conn = {
+      socket,
+      channels: new Set(),
+      userId: null,
+      tokens: MSG_BURST,
+      lastRefill: Date.now(),
+    };
     this.#conns.add(conn);
     socket.on('message', (raw) => {
+      if (!this.#takeToken(conn)) {
+        // flooding client: disconnect rather than burn CPU on its frames
+        this.#conns.delete(conn);
+        conn.socket.close();
+        return;
+      }
       let msg: unknown;
       try {
         msg = JSON.parse(String(raw));
@@ -72,6 +93,7 @@ export class WsHub implements EventSink {
           if (this.#conns.has(conn)) conn.userId = userId;
         });
       } else if (op === 'subscribe' && typeof channel === 'string') {
+        if (conn.channels.size >= MAX_CHANNELS) return;
         conn.channels.add(channel);
         this.#sendInitial(conn, channel);
       } else if (op === 'unsubscribe' && typeof channel === 'string') {
@@ -81,6 +103,15 @@ export class WsHub implements EventSink {
     socket.on('close', () => {
       this.#conns.delete(conn);
     });
+  }
+
+  #takeToken(conn: Conn): boolean {
+    const now = Date.now();
+    conn.tokens = Math.min(MSG_BURST, conn.tokens + ((now - conn.lastRefill) / 1000) * MSG_PER_SEC);
+    conn.lastRefill = now;
+    if (conn.tokens < 1) return false;
+    conn.tokens -= 1;
+    return true;
   }
 
   /** EventSink: fan engine events out to subscribers. */
@@ -175,6 +206,11 @@ export class WsHub implements EventSink {
 
   recentTrades(marketId: string): unknown[] {
     return this.#tradeRing.get(marketId) ?? [];
+  }
+
+  /** live connection count (observability / soak tests) */
+  get connectionCount(): number {
+    return this.#conns.size;
   }
 
   /** Markets with at least one live orderbook:<mkt> subscriber. */
