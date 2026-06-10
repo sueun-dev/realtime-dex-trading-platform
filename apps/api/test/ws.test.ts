@@ -197,6 +197,23 @@ describe('websocket hub', () => {
     late.close();
   });
 
+  it('survives a garbage/flood storm and keeps serving', async () => {
+    const probe = new WsProbe(base);
+    await probe.ready();
+    for (let i = 0; i < 500; i++) {
+      probe.ws.send('not json at all {{{');
+      probe.send({ op: 'subscribe' }); // missing channel
+      probe.send({ op: 'auth', token: 12345 }); // wrong type
+      probe.send({ nonsense: true });
+    }
+    probe.send({ op: 'subscribe', channel: `orderbook:${M}`, market: M });
+    // still alive and serving snapshots after 2000 junk frames
+    await probe.waitFor((f) => f.channel === `orderbook:${M}`);
+    const health = await t.app.inject({ method: 'GET', url: '/api/health' });
+    expect(health.statusCode).toBe(200);
+    probe.close();
+  });
+
   it('unauthenticated sockets never receive user frames', async () => {
     const probe = new WsProbe(base);
     await probe.ready();

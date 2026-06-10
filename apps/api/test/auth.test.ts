@@ -101,6 +101,32 @@ describe('wallet-signature auth', () => {
     }
   });
 
+  it('rejects a tampered JWT (flipped payload char)', async () => {
+    const user = await login(t.app);
+    const [h, p, s] = user.token.split('.');
+    const tampered = `${h}.${p!.slice(0, -2)}${p!.at(-1) === 'A' ? 'B' : 'A'}${p!.at(-1)}.${s}`;
+    const res = await t.app.inject({
+      method: 'GET',
+      url: '/api/account',
+      headers: { authorization: `Bearer ${tampered}` },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects an alg:none JWT forgery', async () => {
+    const b64 = (o: object): string => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const forged = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
+      sub: '0x' + 'a'.repeat(40),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })}.`;
+    const res = await t.app.inject({
+      method: 'GET',
+      url: '/api/account',
+      headers: { authorization: `Bearer ${forged}` },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
   it('validates the address shape', async () => {
     const res = await t.app.inject({
       method: 'POST',
