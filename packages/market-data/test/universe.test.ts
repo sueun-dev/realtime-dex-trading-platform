@@ -81,8 +81,8 @@ describe('buildSpotMarkets', () => {
       tickSize: toUnits('1000'), // from live price 93,151,000
       lotSize: 1n,
       minNotional: toUnits('5000'),
-      makerFeeBps: 5,
-      takerFeeBps: 10,
+      makerFeeBps: 2,
+      takerFeeBps: 2,
       maxLeverage: 1,
     });
     const xrp = configs.find((c) => c.id === 'KRW-XRP')!;
@@ -146,7 +146,7 @@ describe('buildPerpMarkets', () => {
       lotSize: 1000n, // szDecimals 5 → 10^(8-5)
       minNotional: toUnits('10'),
       makerFeeBps: 2,
-      takerFeeBps: 5,
+      takerFeeBps: 2,
       maxLeverage: 40,
     });
     const eth = configs[1]!;

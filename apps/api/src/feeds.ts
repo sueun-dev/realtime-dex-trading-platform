@@ -9,7 +9,7 @@ import { HyperliquidWs, UpbitWs, INTERVAL_MS } from '@dex/market-data';
 import { divUnits, maxBig, minBig, type Ticker } from '@dex/shared';
 import { fetchTickersChunked, type Services, type Stoppable } from './services.js';
 
-const MARK_THROTTLE_MS = 2000;
+const MARK_THROTTLE_MS = 1000;
 const STATS_REFRESH_MS = 5 * 60_000;
 const SPOT_POLL_MS = 30_000;
 

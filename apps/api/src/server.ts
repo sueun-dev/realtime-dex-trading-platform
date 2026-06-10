@@ -7,6 +7,7 @@ import {
   ErrorCodes,
   FAUCET_KRW,
   FAUCET_USDC,
+  FEE_ACCOUNT,
   jsonSafe,
   mulDiv,
   parseOrderRequest,
@@ -79,6 +80,11 @@ export async function buildApp(svc: Services): Promise<FastifyInstance> {
 
   // ---- public ----------------------------------------------------------------
   app.get('/api/health', () => ({ ok: true, seq: engine.seq }));
+
+  /** House commission revenue (FEE_ACCOUNT) per asset. */
+  app.get('/api/stats/fees', () => {
+    return jsonSafe(engine.getBalances(FEE_ACCOUNT));
+  });
 
   app.get('/api/markets', () => {
     return engine.getMarkets().map((m) => ({

@@ -31,8 +31,8 @@ export interface MarketMakerOptions {
 
 const DEFAULT_SPOT = ['KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-SOL', 'KRW-DOGE', 'KRW-ADA'];
 const DEFAULT_PERP = ['BTC-PERP', 'ETH-PERP', 'SOL-PERP', 'XRP-PERP'];
-/** re-quote when price moved more than 10 bps */
-const REQUOTE_BPS = 10n;
+/** re-quote when price moved more than 5 bps */
+const REQUOTE_BPS = 5n;
 /** per-level half-spread: 5 bps × level */
 const LEVEL_BPS = 5n;
 
@@ -42,7 +42,7 @@ export function startMarketMaker(svc: Services, opts: Partial<MarketMakerOptions
   const markets = wanted
     .map((id) => engine.getMarket(id))
     .filter((m): m is MarketConfig => m !== undefined);
-  const intervalMs = opts.intervalMs ?? 4000;
+  const intervalMs = opts.intervalMs ?? 1000;
   const levels = opts.levels ?? 4;
   const spotNotional = opts.spotNotional ?? toUnits('3000000'); // ₩3,000,000
   const perpNotional = opts.perpNotional ?? toUnits('3000'); // $3,000

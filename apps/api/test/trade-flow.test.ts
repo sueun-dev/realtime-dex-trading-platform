@@ -117,6 +117,14 @@ describe('spot trade lifecycle (maker/taker, exact fees)', () => {
     expect(bobFills[0]).toMatchObject({ side: 'buy', role: 'taker', fee: '3000', qty: '0.3' });
   });
 
+  it('house commission lands on the fee account (stats endpoint)', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/api/stats/fees' });
+    expect(res.statusCode).toBe(200);
+    const fees = res.json() as { asset: string; available: string }[];
+    // maker 1,500 + taker 3,000 from the single 0.3 @ 10,000,000 fill
+    expect(fees.find((f) => f.asset === 'KRW')).toMatchObject({ available: '4500' });
+  });
+
   it('open orders list shows the remainder; cancel releases the exact lock', async () => {
     const open = (await authed(t.app, alice, 'GET', '/api/orders')).json() as Wire[];
     expect(open).toHaveLength(1);

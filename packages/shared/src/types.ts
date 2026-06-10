@@ -151,10 +151,11 @@ export const FEE_ACCOUNT = '__fees__';
 /** Internal clearinghouse book-entry account for perp PnL cash flows (may go negative). */
 export const CLEARING_ACCOUNT = '__clearing__';
 
-export const SPOT_MAKER_FEE_BPS = 5;
-export const SPOT_TAKER_FEE_BPS = 10;
+/** House commission: flat 0.02% (2 bps) on every fill, both roles, all markets. */
+export const SPOT_MAKER_FEE_BPS = 2;
+export const SPOT_TAKER_FEE_BPS = 2;
 export const PERP_MAKER_FEE_BPS = 2;
-export const PERP_TAKER_FEE_BPS = 5;
+export const PERP_TAKER_FEE_BPS = 2;
 
 export const FAUCET_KRW = 100_000_000n * 10n ** 8n; // ₩100,000,000
 export const FAUCET_USDC = 100_000n * 10n ** 8n; // $100,000
