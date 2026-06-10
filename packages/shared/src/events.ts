@@ -77,6 +77,8 @@ export interface PositionChangedEvent extends BaseEvent {
   size: bigint;
   entryPrice: bigint;
   leverage: number;
+  /** engine's exact isolated margin AFTER this change (1e8 USDC units; 0 when closed) */
+  margin: bigint;
   /** realized PnL delta from this change (1e8 USDC units) */
   realizedPnl: bigint;
 }

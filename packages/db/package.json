@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit",
+    "build": "pnpm run typecheck",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },

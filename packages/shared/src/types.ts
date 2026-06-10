@@ -148,6 +148,8 @@ export interface AccountSummary {
 export const SPOT_QUOTE = 'KRW';
 export const PERP_QUOTE = 'USDC';
 export const FEE_ACCOUNT = '__fees__';
+/** Internal clearinghouse book-entry account for perp PnL cash flows (may go negative). */
+export const CLEARING_ACCOUNT = '__clearing__';
 
 export const SPOT_MAKER_FEE_BPS = 5;
 export const SPOT_TAKER_FEE_BPS = 10;

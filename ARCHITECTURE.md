@@ -115,6 +115,22 @@ rejects POST_ONLY_WOULD_CROSS. Self-trade: resting own order is cancelled (reaso
 `selfTrade`), matching continues. Validation order: market exists → qty/price tick&lot
 & minNotional → reduceOnly rules → balance/margin lock → postOnly/FOK → match.
 
+### Perp accounting — clearing model (BINDING)
+
+Every realized-PnL credit/debit to a user is mirrored inversely on the internal
+`CLEARING_ACCOUNT` (`__clearing__`, a USDC book-entry balance allowed to go negative).
+Liquidation shortfall (margin − payout) goes to `FEE_ACCOUNT` (insurance). Funding
+payments are applied to `position.margin`, mirrored on `CLEARING_ACCOUNT`, and the
+per-market funding sum (incl. clearing mirror) nets to exactly 0 with the rounding
+remainder absorbed by `FEE_ACCOUNT`.
+
+**Conservation invariant (testable, exact):** Σ over real users of
+(available + locked + Σ position.margin) + FEE_ACCOUNT + CLEARING_ACCOUNT
+== Σ net deposits, after every operation.
+**Solvency property:** force-closing all open positions at one common mark price
+returns CLEARING_ACCOUNT to ~0 (|clearing| bounded by accumulated rounding, i.e. a
+few units per fill), absent liquidation-clamp (bad-debt) events.
+
 ## Engine events (emitted, persisted, broadcast)
 
 `orderAccepted, orderRejected, orderFilled (per fill, maker+taker info), orderCancelled,
