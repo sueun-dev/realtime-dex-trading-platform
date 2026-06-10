@@ -1,0 +1,142 @@
+import { Exchange } from '@dex/engine';
+import { Projector, createDb, createRepos, type DbHandle, type Repos } from '@dex/db';
+import {
+  CandleService,
+  HyperliquidRest,
+  PriceCache,
+  UpbitRest,
+  buildPerpMarkets,
+  buildSpotMarkets,
+} from '@dex/market-data';
+import type { MarketConfig, Ticker } from '@dex/shared';
+import { AuthService } from './auth.js';
+import { Pipeline } from './pipeline.js';
+import { WsHub } from './wsHub.js';
+import { startFeeds } from './feeds.js';
+import { startMarketMaker, type MarketMakerOptions } from './marketMaker.js';
+import { startFunding } from './funding.js';
+
+export interface Stoppable {
+  stop(): void;
+}
+
+export interface ServiceOptions {
+  /** PGlite data directory; undefined = in-memory (tests) */
+  dataDir?: string;
+  /** 'live' loads the real Upbit KRW + Hyperliquid perp universes */
+  universe: 'live' | MarketConfig[];
+  /** live ticker/mark-price feeds (Upbit WS + Hyperliquid WS) */
+  feeds?: boolean;
+  marketMaker?: boolean | Partial<MarketMakerOptions>;
+  funding?: boolean;
+  jwtSecret?: string;
+  perpTopN?: number;
+  log?: (msg: string) => void;
+}
+
+export interface Services {
+  db: DbHandle;
+  repos: Repos;
+  projector: Projector;
+  engine: Exchange;
+  auth: AuthService;
+  hub: WsHub;
+  pipeline: Pipeline;
+  priceCache: PriceCache;
+  candles: CandleService;
+  upbit: UpbitRest;
+  hl: HyperliquidRest;
+  log: (msg: string) => void;
+  stop(): Promise<void>;
+}
+
+const TICKER_CHUNK = 100;
+
+export async function fetchTickersChunked(upbit: UpbitRest, codes: string[]): Promise<Ticker[]> {
+  const out: Ticker[] = [];
+  for (let i = 0; i < codes.length; i += TICKER_CHUNK) {
+    out.push(...(await upbit.fetchTickers(codes.slice(i, i + TICKER_CHUNK))));
+  }
+  return out;
+}
+
+/**
+ * Boot order matters: persisted market configs are merged with the freshly
+ * fetched real universe (fresh wins), the engine is constructed with the full
+ * market list, and only then is the durable projection restored into it.
+ */
+export async function buildServices(opts: ServiceOptions): Promise<Services> {
+  const log = opts.log ?? ((m: string) => console.log(`[dex-api] ${m}`));
+  const db = await createDb(opts.dataDir);
+  const repos = createRepos(db.db);
+  const projector = new Projector(db.db);
+  const upbit = new UpbitRest();
+  const hl = new HyperliquidRest();
+
+  const byId = new Map<string, MarketConfig>();
+  for (const m of await repos.markets.list()) byId.set(m.id, m);
+
+  let spotTickers: Ticker[] = [];
+  if (opts.universe === 'live') {
+    const raw = await upbit.fetchMarkets();
+    const krwCodes = raw.filter((m) => m.market.startsWith('KRW-')).map((m) => m.market);
+    spotTickers = await fetchTickersChunked(upbit, krwCodes);
+    const spot = buildSpotMarkets(raw, spotTickers);
+    const [meta, mids] = await Promise.all([hl.meta(), hl.allMids()]);
+    const perp = buildPerpMarkets(meta, mids, opts.perpTopN ?? 30);
+    for (const m of [...spot, ...perp]) byId.set(m.id, m);
+    log(`live universe: ${spot.length} KRW spot + ${perp.length} perp markets`);
+  } else {
+    for (const m of opts.universe) byId.set(m.id, m);
+  }
+  const markets = [...byId.values()];
+  await repos.markets.upsertAll(markets);
+
+  const engine = new Exchange({ markets });
+  const restored = await repos.loadRestoreState();
+  engine.restoreState(restored);
+  if (restored.lastSeq > 0) {
+    log(`restored state @seq=${restored.lastSeq}: ${restored.openOrders.length} open orders, ${restored.positions.length} positions`);
+  }
+
+  const auth = new AuthService(opts.jwtSecret ?? process.env.DEX_JWT_SECRET ?? 'dex-dev-secret');
+  const hub = new WsHub(engine, (t) => auth.verifyToken(t));
+  const pipeline = new Pipeline(projector, hub);
+  const priceCache = new PriceCache();
+  const candles = new CandleService(upbit, hl);
+
+  priceCache.on('ticker', (t: Ticker) => hub.publishTicker(t));
+  // seed spot tickers fetched at boot so /api/markets has prices immediately
+  for (const t of spotTickers) priceCache.setTicker(t);
+
+  const stoppables: Stoppable[] = [];
+  const services: Services = {
+    db,
+    repos,
+    projector,
+    engine,
+    auth,
+    hub,
+    pipeline,
+    priceCache,
+    candles,
+    upbit,
+    hl,
+    log,
+    async stop() {
+      for (const s of stoppables) s.stop();
+      hub.close();
+      await pipeline.drain();
+      await db.close();
+    },
+  };
+
+  if (opts.feeds) stoppables.push(startFeeds(services));
+  if (opts.marketMaker) {
+    const mmOpts = typeof opts.marketMaker === 'object' ? opts.marketMaker : {};
+    stoppables.push(startMarketMaker(services, mmOpts));
+  }
+  if (opts.funding) stoppables.push(startFunding(services));
+
+  return services;
+}
