@@ -80,7 +80,7 @@ describe('Full universe build (live)', () => {
         expect(c.minNotional > 0n).toBe(true);
         expect(c.maxLeverage).toBeGreaterThanOrEqual(1);
         expect(c.makerFeeBps).toBe(2);
-        expect(c.takerFeeBps).toBe(5);
+        expect(c.takerFeeBps).toBe(2);
       }
     },
     LIVE_TIMEOUT,

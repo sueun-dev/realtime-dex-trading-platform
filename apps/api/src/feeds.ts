@@ -5,7 +5,7 @@
  *  - 24h perp stats refreshed from real Hyperliquid 1h candles every 5 minutes
  *  - Upbit REST ticker poll every 30s as a WS-gap fallback
  */
-import { HyperliquidWs, UpbitWs, INTERVAL_MS } from '@dex/market-data';
+import { HyperliquidWs, UpbitWs, INTERVAL_MS, type HlTrade, type PublicTrade } from '@dex/market-data';
 import { divUnits, maxBig, minBig, type Ticker } from '@dex/shared';
 import { fetchTickersChunked, type Services, type Stoppable } from './services.js';
 
@@ -21,7 +21,7 @@ interface PerpStats {
 }
 
 export function startFeeds(svc: Services): Stoppable {
-  const { engine, pipeline, priceCache, log } = svc;
+  const { engine, pipeline, priceCache, hub, log } = svc;
   const markets = engine.getMarkets();
   const spotCodes = markets.filter((m) => m.type === 'spot').map((m) => m.id);
   const perps = markets.filter((m) => m.type === 'perp');
@@ -29,16 +29,40 @@ export function startFeeds(svc: Services): Stoppable {
   const stats = new Map<string, PerpStats>();
   const lastMark = new Map<string, { price: bigint; at: number }>();
 
-  // ---- spot: Upbit websocket -------------------------------------------------
+  // ---- spot: Upbit websocket (tickers + REAL market prints) -------------------
   const upbitWs = new UpbitWs(spotCodes);
   upbitWs.on('ticker', (t: Ticker) => priceCache.setTicker(t));
+  upbitWs.on('trade', (t: PublicTrade) =>
+    hub.publishExternalTrade({
+      id: `u${t.sequentialId}`,
+      marketId: t.marketId,
+      price: t.price,
+      qty: t.qty,
+      takerSide: t.side,
+      ts: t.ts,
+    }),
+  );
   upbitWs.on('wsError', () => {
     /* reconnect handles it */
   });
   upbitWs.connect();
 
-  // ---- perp: Hyperliquid websocket -------------------------------------------
-  const hlWs = new HyperliquidWs();
+  // ---- perp: Hyperliquid websocket (mids + REAL market prints) ----------------
+  const hlWs = new HyperliquidWs({ tradeCoins: perps.map((m) => m.base) });
+  hlWs.on('trades', (trades: HlTrade[]) => {
+    for (const t of trades) {
+      const m = perpByCoin.get(t.coin);
+      if (!m) continue;
+      hub.publishExternalTrade({
+        id: `h${t.tid}`,
+        marketId: m.id,
+        price: t.price,
+        qty: t.qty,
+        takerSide: t.side,
+        ts: t.ts,
+      });
+    }
+  });
   hlWs.on('mids', (mids: Map<string, bigint>) => {
     const now = Date.now();
     for (const [coin, mid] of mids) {

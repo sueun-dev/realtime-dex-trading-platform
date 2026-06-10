@@ -13,7 +13,7 @@ import { AuthService } from './auth.js';
 import { Pipeline } from './pipeline.js';
 import { WsHub } from './wsHub.js';
 import { startFeeds } from './feeds.js';
-import { startMarketMaker, type MarketMakerOptions } from './marketMaker.js';
+import { startBookMirror } from './bookMirror.js';
 import { startFunding } from './funding.js';
 
 export interface Stoppable {
@@ -27,7 +27,8 @@ export interface ServiceOptions {
   universe: 'live' | MarketConfig[];
   /** live ticker/mark-price feeds (Upbit WS + Hyperliquid WS) */
   feeds?: boolean;
-  marketMaker?: boolean | Partial<MarketMakerOptions>;
+  /** mirror the REAL source-venue orderbooks into the engine (house liquidity) */
+  marketMaker?: boolean;
   funding?: boolean;
   jwtSecret?: string;
   perpTopN?: number;
@@ -132,10 +133,7 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
   };
 
   if (opts.feeds) stoppables.push(startFeeds(services));
-  if (opts.marketMaker) {
-    const mmOpts = typeof opts.marketMaker === 'object' ? opts.marketMaker : {};
-    stoppables.push(startMarketMaker(services, mmOpts));
-  }
+  if (opts.marketMaker) stoppables.push(startBookMirror(services));
   if (opts.funding) stoppables.push(startFunding(services));
 
   return services;

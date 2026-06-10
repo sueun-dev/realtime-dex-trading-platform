@@ -166,6 +166,37 @@ describe('websocket hub', () => {
     probe.close();
   });
 
+  it('external venue prints stream into trades:<mkt> and seed the ring', async () => {
+    const probe = new WsProbe(base);
+    await probe.ready();
+    probe.send({ op: 'subscribe', channel: `trades:${M}`, market: M });
+    t.svc.hub.publishExternalTrade({
+      id: 'u1234567890',
+      marketId: M,
+      price: toUnits('10050000'),
+      qty: toUnits('0.025'),
+      takerSide: 'sell',
+      ts: Date.now(),
+    });
+    const frame = await probe.waitFor((f) => {
+      if (f.channel !== `trades:${M}`) return false;
+      return (f.data as { id?: string }[]).some((x) => x.id === 'u1234567890');
+    });
+    const print = (frame.data as { id: string; price: string; qty: string; takerSide: string }[]).find(
+      (x) => x.id === 'u1234567890',
+    )!;
+    expect(print).toMatchObject({ price: '10050000', qty: '0.025', takerSide: 'sell' });
+
+    // late subscriber gets it from the ring
+    const late = new WsProbe(base);
+    await late.ready();
+    late.send({ op: 'subscribe', channel: `trades:${M}`, market: M });
+    const seeded = await late.waitFor((f) => f.channel === `trades:${M}`);
+    expect((seeded.data as { id?: string }[]).some((x) => x.id === 'u1234567890')).toBe(true);
+    probe.close();
+    late.close();
+  });
+
   it('unauthenticated sockets never receive user frames', async () => {
     const probe = new WsProbe(base);
     await probe.ready();

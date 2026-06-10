@@ -74,7 +74,10 @@ describe('parseUpbitWsFrame — strict, same rules as the REST parsers', () => {
 
   it('passes through status/keepalive frames as other', () => {
     expect(parseUpbitWsFrame('{"status":"UP"}')).toEqual({ kind: 'other' });
-    expect(parseUpbitWsFrame('{"type":"orderbook","code":"KRW-BTC"}')).toEqual({ kind: 'other' });
+  });
+
+  it('orderbook frames are parsed strictly now — malformed ones throw', () => {
+    expect(() => parseUpbitWsFrame('{"type":"orderbook","code":"KRW-BTC"}')).toThrow(/orderbook/);
   });
 });
 

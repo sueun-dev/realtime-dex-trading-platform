@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
-import type { Side, Ticker } from '@dex/shared';
+import type { BookLevel, Side, Ticker } from '@dex/shared';
 import type { PublicTrade } from './upbit.js';
 import {
+  expectArray,
   expectBigIntId,
   expectNumber,
   expectObject,
@@ -13,9 +14,20 @@ import {
 
 export const UPBIT_WS_URL = 'wss://api.upbit.com/websocket/v1';
 
+/** A real exchange orderbook snapshot (prices AND sizes are the venue's). */
+export interface ExternalOrderbook {
+  marketId: string;
+  /** descending price */
+  bids: BookLevel[];
+  /** ascending price */
+  asks: BookLevel[];
+  ts: number;
+}
+
 export type UpbitWsFrame =
   | { kind: 'ticker'; ticker: Ticker }
   | { kind: 'trade'; trade: PublicTrade }
+  | { kind: 'orderbook'; orderbook: ExternalOrderbook }
   | { kind: 'other' };
 
 /**
@@ -59,27 +71,57 @@ export function parseUpbitWsFrame(text: string): UpbitWsFrame {
     };
     return { kind: 'trade', trade };
   }
+  if (type === 'orderbook') {
+    const ctx = 'Upbit WS orderbook';
+    const units = expectArray(msg['orderbook_units'], ctx);
+    const bids: BookLevel[] = [];
+    const asks: BookLevel[] = [];
+    units.forEach((u, i) => {
+      const o = expectObject(u, `${ctx}.orderbook_units[${i}]`);
+      bids.push({ price: numToUnits(o['bid_price'], 'bid_price'), qty: numToUnits(o['bid_size'], 'bid_size') });
+      asks.push({ price: numToUnits(o['ask_price'], 'ask_price'), qty: numToUnits(o['ask_size'], 'ask_size') });
+    });
+    // Upbit sends units best-first already; enforce ordering strictly anyway
+    bids.sort((a, b) => (a.price === b.price ? 0 : a.price > b.price ? -1 : 1));
+    asks.sort((a, b) => (a.price === b.price ? 0 : a.price < b.price ? -1 : 1));
+    return {
+      kind: 'orderbook',
+      orderbook: {
+        marketId: expectString(msg['code'], 'code', ctx),
+        bids,
+        asks,
+        ts: expectNumber(msg['timestamp'], 'timestamp', ctx),
+      },
+    };
+  }
   return { kind: 'other' }; // status/keepalive frames
 }
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
 
+export type UpbitWsType = 'ticker' | 'trade' | 'orderbook';
+
 export interface UpbitWsOptions {
   url?: string;
+  /** subscription frame types; default ['ticker', 'trade'] */
+  types?: UpbitWsType[];
 }
 
 /**
- * Upbit public websocket: subscribes ticker + trade for the given codes.
- * Emits:
+ * Upbit public websocket: subscribes the configured frame types for the given
+ * codes. Emits:
  *  - 'ticker' (Ticker)
  *  - 'trade' (PublicTrade)
+ *  - 'orderbook' (ExternalOrderbook) — real venue depth, prices AND sizes
  *  - 'open' / 'close' / 'wsError' (Error) — informational
  * Auto-reconnects with capped exponential backoff and resubscribes.
- * `close()` is final: no further reconnects.
+ * `setCodes()` re-sends the subscription live (Upbit replaces subscriptions
+ * on the same socket). `close()` is final: no further reconnects.
  */
 export class UpbitWs extends EventEmitter {
-  readonly #codes: string[];
+  #codes: string[];
+  readonly #types: UpbitWsType[];
   readonly #url: string;
   #ws: WebSocket | null = null;
   #closed = false;
@@ -89,7 +131,29 @@ export class UpbitWs extends EventEmitter {
   constructor(codes: string[], opts: UpbitWsOptions = {}) {
     super();
     this.#codes = [...codes];
+    this.#types = opts.types ?? ['ticker', 'trade'];
     this.#url = opts.url ?? UPBIT_WS_URL;
+  }
+
+  /** Replace the subscribed code set; takes effect immediately when connected. */
+  setCodes(codes: string[]): void {
+    const next = [...codes];
+    if (next.length === this.#codes.length && next.every((c, i) => c === this.#codes[i])) return;
+    this.#codes = next;
+    if (this.#ws?.readyState === WebSocket.OPEN && next.length > 0) {
+      this.#ws.send(this.#subscribeFrame());
+    }
+  }
+
+  get codes(): string[] {
+    return [...this.#codes];
+  }
+
+  #subscribeFrame(): string {
+    return JSON.stringify([
+      { ticket: 'dex' },
+      ...this.#types.map((type) => ({ type, codes: this.#codes })),
+    ]);
   }
 
   connect(): void {
@@ -99,13 +163,7 @@ export class UpbitWs extends EventEmitter {
 
     ws.on('open', () => {
       this.#attempts = 0;
-      ws.send(
-        JSON.stringify([
-          { ticket: 'dex' },
-          { type: 'ticker', codes: this.#codes },
-          { type: 'trade', codes: this.#codes },
-        ]),
-      );
+      if (this.#codes.length > 0) ws.send(this.#subscribeFrame());
       this.emit('open');
     });
 
@@ -169,5 +227,6 @@ export class UpbitWs extends EventEmitter {
     const frame = parseUpbitWsFrame(text); // throws on malformed frames → wsError
     if (frame.kind === 'ticker') this.emit('ticker', frame.ticker);
     else if (frame.kind === 'trade') this.emit('trade', frame.trade);
+    else if (frame.kind === 'orderbook') this.emit('orderbook', frame.orderbook);
   }
 }

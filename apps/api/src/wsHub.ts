@@ -177,6 +177,37 @@ export class WsHub implements EventSink {
     return this.#tradeRing.get(marketId) ?? [];
   }
 
+  /** Markets with at least one live orderbook:<mkt> subscriber. */
+  subscribedBooks(): Set<string> {
+    const out = new Set<string>();
+    for (const c of this.#conns) {
+      for (const ch of c.channels) {
+        if (ch.startsWith('orderbook:')) out.add(ch.slice('orderbook:'.length));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A REAL print from the source venue (Upbit/Hyperliquid) — not one of our
+   * fills. Streamed into the same trades:<mkt> channel + recent ring so the
+   * trades feed reflects the actual market.
+   */
+  publishExternalTrade(trade: {
+    id: string;
+    marketId: string;
+    price: bigint;
+    qty: bigint;
+    takerSide: 'buy' | 'sell';
+    ts: number;
+  }): void {
+    const wire = jsonSafe(trade);
+    const ring = this.#tradeRing.get(trade.marketId) ?? [];
+    ring.unshift(wire);
+    this.#tradeRing.set(trade.marketId, ring.slice(0, TRADE_RING));
+    this.#broadcast(`trades:${trade.marketId}`, [wire]);
+  }
+
   close(): void {
     this.#closed = true;
     if (this.#bookTimer !== null) clearTimeout(this.#bookTimer);

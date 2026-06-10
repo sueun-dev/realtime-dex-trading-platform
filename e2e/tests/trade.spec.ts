@@ -55,6 +55,27 @@ test('orderbook shows live liquidity around the real BTC price', async () => {
   await expect(page.getByTestId('spread')).toBeVisible();
 });
 
+test('orderbook depth is the REAL venue book (heterogeneous sizes)', async () => {
+  // a synthetic market maker quotes uniform sizes; the real Upbit book never does
+  await expect(page.getByTestId('ask-row-4')).toBeVisible();
+  const qtys = new Set<string>();
+  for (let i = 0; i < 5; i++) {
+    const text = await page.getByTestId(`ask-row-${i}`).textContent();
+    qtys.add(text ?? String(i));
+  }
+  expect(qtys.size).toBeGreaterThan(2);
+});
+
+test('trades feed streams REAL market prints without us trading', async () => {
+  // switch the book panel to 체결 — rows must appear from the live Upbit
+  // trade stream even though this session has placed no orders yet
+  await page.locator('.book-panel .tabs button', { hasText: '체결' }).click();
+  await expect(page.locator('.trade-row').first()).toBeVisible({ timeout: 90_000 });
+  const rows = await page.locator('.trade-row').count();
+  expect(rows).toBeGreaterThanOrEqual(1);
+  await page.locator('.book-panel .tabs button', { hasText: '호가' }).click();
+});
+
 test('chart renders real candles', async () => {
   const canvases = page.locator('canvas');
   await expect(canvases.first()).toBeVisible();
