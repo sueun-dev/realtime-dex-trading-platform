@@ -7,6 +7,7 @@ import {
   UpbitRest,
   buildPerpMarkets,
   buildSpotMarkets,
+  spotMarketIdForUpbitCode,
 } from '@dex/market-data';
 import type { MarketConfig, Ticker } from '@dex/shared';
 import { AuthService } from './auth.js';
@@ -91,13 +92,18 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
   let spotTickers: Ticker[] = [];
   if (opts.universe === 'live') {
     const raw = await upbit.fetchMarkets();
-    const krwCodes = raw.filter((m) => m.market.startsWith('KRW-')).map((m) => m.market);
-    spotTickers = await fetchTickersChunked(upbit, krwCodes);
-    const spot = buildSpotMarkets(raw, spotTickers);
+    // a DEX settles in USDC — mirror Upbit's real USDT stablecoin books
+    const usdtCodes = raw
+      .filter((m) => m.market.startsWith('USDT-') && m.market !== 'USDT-USDT')
+      .map((m) => m.market);
+    const usdtTickers = await fetchTickersChunked(upbit, usdtCodes); // keyed by USDT-<base>
+    const spot = buildSpotMarkets(raw, usdtTickers);
     const [meta, mids] = await Promise.all([hl.meta(), hl.allMids()]);
     const perp = buildPerpMarkets(meta, mids, opts.perpTopN ?? 30);
     for (const m of [...spot, ...perp]) byId.set(m.id, m);
-    log(`live universe: ${spot.length} KRW spot + ${perp.length} perp markets`);
+    // relabel USDT-<base> → <base>-USDC for the engine/price-cache namespace
+    spotTickers = usdtTickers.map((t) => ({ ...t, marketId: spotMarketIdForUpbitCode(t.marketId) }));
+    log(`live universe: ${spot.length} USDC spot + ${perp.length} perp markets`);
   } else {
     for (const m of opts.universe) byId.set(m.id, m);
   }

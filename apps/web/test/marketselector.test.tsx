@@ -5,12 +5,12 @@ import { useMarketStore } from '../src/stores/market.js';
 import { PERP_BTC, SPOT_BTC, SPOT_ETH, resetStores, seedMarkets, ticker } from './helpers.js';
 
 function seedSelector(): void {
-  seedMarkets([SPOT_BTC, SPOT_ETH, PERP_BTC], 'KRW-BTC');
+  seedMarkets([SPOT_BTC, SPOT_ETH, PERP_BTC], 'BTC-USDC');
   useMarketStore.setState({
     selectorOpen: true,
     tickers: {
-      'KRW-BTC': ticker('KRW-BTC', '93130000', '0.05'),
-      'KRW-ETH': ticker('KRW-ETH', '5000000', '-0.02'),
+      'BTC-USDC': ticker('BTC-USDC', '67500', '0.05'),
+      'ETH-USDC': ticker('ETH-USDC', '3500', '-0.02'),
       'BTC-PERP': ticker('BTC-PERP', '68000', '0.01'),
     },
   });
@@ -27,7 +27,7 @@ describe('MarketSelector', () => {
     const rows = screen.getAllByTestId('market-row');
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent('비트코인');
-    expect(rows[0]).toHaveTextContent('93,130,000');
+    expect(rows[0]).toHaveTextContent('67,500');
     expect(rows[0]).toHaveTextContent('+5.00%');
     expect(rows[1]).toHaveTextContent('-2.00%');
   });
@@ -37,7 +37,7 @@ describe('MarketSelector', () => {
     fireEvent.change(screen.getByPlaceholderText('코인 검색 (비트코인, BTC…)'), { target: { value: '비트' } });
     const rows = screen.getAllByTestId('market-row');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toHaveTextContent('BTC/KRW');
+    expect(rows[0]).toHaveTextContent('BTC/USDC');
   });
 
   it('searches by english name', () => {
@@ -45,7 +45,7 @@ describe('MarketSelector', () => {
     fireEvent.change(screen.getByPlaceholderText('코인 검색 (비트코인, BTC…)'), { target: { value: 'ethereum' } });
     const rows = screen.getAllByTestId('market-row');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toHaveTextContent('ETH/KRW');
+    expect(rows[0]).toHaveTextContent('ETH/USDC');
   });
 
   it('searches by symbol across spot and perp', () => {
@@ -54,9 +54,9 @@ describe('MarketSelector', () => {
     expect(screen.getAllByTestId('market-row')).toHaveLength(2);
   });
 
-  it('filters by KRW / PERP / 전체 tabs', () => {
+  it('filters by USDC / PERP / 전체 tabs', () => {
     render(<MarketSelector />);
-    fireEvent.click(screen.getByRole('button', { name: 'KRW' }));
+    fireEvent.click(screen.getByRole('button', { name: 'USDC' }));
     expect(screen.getAllByTestId('market-row')).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'PERP' }));
     expect(screen.getAllByTestId('market-row')).toHaveLength(1);

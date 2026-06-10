@@ -36,16 +36,16 @@ describe('kill the server under a live mirror + resting user order', () => {
       await applyMirrorSnapshot(
         deps,
         TEST_SPOT,
-        lvls(['9998000', '1.5'], ['9997000', '0.7']),
-        lvls(['10002000', '0.9']),
+        lvls(['99.98', '1.5'], ['99.97', '0.7']),
+        lvls(['100.02', '0.9']),
       );
       // user bid inside the real spread
       const res = await placeOrder(t1.app, user, {
         marketId: M,
         side: 'buy',
         type: 'limit',
-        price: '10000000',
-        qty: '0.001',
+        price: '100',
+        qty: '0.05',
         tif: 'GTC',
       });
       expect(res.statusCode).toBe(200);
@@ -64,23 +64,23 @@ describe('kill the server under a live mirror + resting user order', () => {
         await t2.app.inject({ method: 'GET', url: `/api/markets/${M}/orderbook?depth=10` })
       ).json() as { bids: { price: string; qty: string }[]; asks: { price: string; qty: string }[] };
       expect(restored.bids).toEqual([
-        { price: '10000000', qty: '0.001' }, // the user's bid
-        { price: '9998000', qty: '1.5' },
-        { price: '9997000', qty: '0.7' },
+        { price: '100', qty: '0.05' }, // the user's bid
+        { price: '99.98', qty: '1.5' },
+        { price: '99.97', qty: '0.7' },
       ]);
-      expect(restored.asks).toEqual([{ price: '10002000', qty: '0.9' }]);
+      expect(restored.asks).toEqual([{ price: '100.02', qty: '0.9' }]);
 
       // the next REAL snapshot replaces the stale mirror levels wholesale,
       // but never touches the user's order
-      await applyMirrorSnapshot(deps2, TEST_SPOT, lvls(['9999000', '2']), lvls(['10003000', '1.1']));
+      await applyMirrorSnapshot(deps2, TEST_SPOT, lvls(['99.99', '2']), lvls(['100.03', '1.1']));
       const reconciled = (
         await t2.app.inject({ method: 'GET', url: `/api/markets/${M}/orderbook?depth=10` })
       ).json() as { bids: { price: string; qty: string }[]; asks: { price: string; qty: string }[] };
       expect(reconciled.bids).toEqual([
-        { price: '10000000', qty: '0.001' },
-        { price: '9999000', qty: '2' },
+        { price: '100', qty: '0.05' },
+        { price: '99.99', qty: '2' },
       ]);
-      expect(reconciled.asks).toEqual([{ price: '10003000', qty: '1.1' }]);
+      expect(reconciled.asks).toEqual([{ price: '100.03', qty: '1.1' }]);
 
       // mirror's stale orders were cancelled, not orphaned: only the new
       // levels remain under the house account
@@ -101,8 +101,8 @@ describe('kill the server under a live mirror + resting user order', () => {
           headers: { authorization: `Bearer ${user.token}` },
         })
       ).json() as { balances: { asset: string; available: string; locked: string }[] };
-      const krw = acct.balances.find((b) => b.asset === 'KRW');
-      expect(krw).toMatchObject({ available: '100000000', locked: '0' });
+      const usdc = acct.balances.find((b) => b.asset === 'USDC');
+      expect(usdc).toMatchObject({ available: '100000', locked: '0' });
     } finally {
       await t2.stop();
     }

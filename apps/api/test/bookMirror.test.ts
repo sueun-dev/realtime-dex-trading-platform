@@ -17,7 +17,7 @@ import {
   type TestUser,
 } from './helpers.js';
 
-const M = TEST_SPOT.id; // tick 1000 KRW, lot 0.0001, minNotional 5000
+const M = TEST_SPOT.id; // TBT-USDC, tick 0.01, lot 0.001, minNotional 1
 
 let t: TestApp;
 let deps: MirrorDeps;
@@ -45,18 +45,18 @@ describe('applyMirrorSnapshot', () => {
     await applyMirrorSnapshot(
       deps,
       TEST_SPOT,
-      lvls(['10000000', '0.5'], ['9999000', '1.25'], ['9998000', '0.0421']),
-      lvls(['10001000', '0.33'], ['10002000', '2.5']),
+      lvls(['100', '0.5'], ['99.99', '1.25'], ['99.98', '0.421']),
+      lvls(['100.01', '0.33'], ['100.02', '2.5']),
     );
     const book = await bookWire();
     expect(book.bids).toEqual([
-      { price: '10000000', qty: '0.5' },
-      { price: '9999000', qty: '1.25' },
-      { price: '9998000', qty: '0.0421' },
+      { price: '100', qty: '0.5' },
+      { price: '99.99', qty: '1.25' },
+      { price: '99.98', qty: '0.421' },
     ]);
     expect(book.asks).toEqual([
-      { price: '10001000', qty: '0.33' },
-      { price: '10002000', qty: '2.5' },
+      { price: '100.01', qty: '0.33' },
+      { price: '100.02', qty: '2.5' },
     ]);
   });
 
@@ -66,12 +66,12 @@ describe('applyMirrorSnapshot', () => {
     const evts = await applyMirrorSnapshot(
       deps,
       TEST_SPOT,
-      lvls(['10000000', '0.6'], ['9999000', '1.25'], ['9998000', '0.0421']),
-      lvls(['10001000', '0.33']),
+      lvls(['100', '0.6'], ['99.99', '1.25'], ['99.98', '0.421']),
+      lvls(['100.01', '0.33']),
     );
     const book = await bookWire();
-    expect(book.bids[0]).toEqual({ price: '10000000', qty: '0.6' });
-    expect(book.asks).toEqual([{ price: '10001000', qty: '0.33' }]);
+    expect(book.bids[0]).toEqual({ price: '100', qty: '0.6' });
+    expect(book.asks).toEqual([{ price: '100.01', qty: '0.33' }]);
     // 1 cancel+replace (bid) + 1 cancel (ask) — a handful of events, not a full requote
     expect(t.svc.engine.seq - before).toBeLessThanOrEqual(8);
     expect(evts.length).toBeLessThanOrEqual(8);
@@ -81,49 +81,49 @@ describe('applyMirrorSnapshot', () => {
     await applyMirrorSnapshot(
       deps,
       TEST_SPOT,
-      lvls(['9999500', '0.5']), // off-grid: tick is 1000
-      lvls(['10000500', '0.5']),
+      lvls(['99.995', '0.5']), // off-grid: tick is 0.01
+      lvls(['100.005', '0.5']),
     );
     const book = await bookWire();
-    expect(book.bids).toEqual([{ price: '9999000', qty: '0.5' }]);
-    expect(book.asks).toEqual([{ price: '10001000', qty: '0.5' }]);
+    expect(book.bids).toEqual([{ price: '99.99', qty: '0.5' }]);
+    expect(book.asks).toEqual([{ price: '100.01', qty: '0.5' }]);
   });
 
   it('drops dust below lot/minNotional instead of crashing', async () => {
     await applyMirrorSnapshot(
       deps,
       TEST_SPOT,
-      lvls(['10000000', '0.00005'], ['9999000', '0.0004']), // dust qty / dust notional
-      lvls(['10001000', '1']),
+      lvls(['100', '0.0005'], ['99.99', '0.005']), // sub-lot qty / sub-$1 notional
+      lvls(['100.01', '1']),
     );
     const book = await bookWire();
-    expect(book.bids).toEqual([]); // 0.00005 < lot; 0.0004×9,999,000 < 5,000 KRW
-    expect(book.asks).toEqual([{ price: '10001000', qty: '1' }]);
+    expect(book.bids).toEqual([]); // 0.0005 < lot 0.001; 0.005×99.99 ≈ $0.50 < $1 minNotional
+    expect(book.asks).toEqual([{ price: '100.01', qty: '1' }]);
   });
 
   it('a user bid inside the real spread rests, then fills when the venue crosses it', async () => {
     const user: TestUser = await loginAndFund(t.app);
-    await applyMirrorSnapshot(deps, TEST_SPOT, lvls(['9998000', '1']), lvls(['10002000', '1']));
+    await applyMirrorSnapshot(deps, TEST_SPOT, lvls(['99.98', '1']), lvls(['100.02', '1']));
 
     // user improves the bid inside the spread — rests like on the source venue
     const res = await placeOrder(t.app, user, {
       marketId: M,
       side: 'buy',
       type: 'limit',
-      price: '10000000',
-      qty: '0.001',
+      price: '100',
+      qty: '0.05',
       tif: 'GTC',
     });
     expect((res.json() as { status: string }).status).toBe('open');
 
     // the real market trades down through the user's price → mirror ask crosses
-    await applyMirrorSnapshot(deps, TEST_SPOT, lvls(['9998000', '1']), lvls(['9999000', '1']));
+    await applyMirrorSnapshot(deps, TEST_SPOT, lvls(['99.98', '1']), lvls(['99.99', '1']));
     const acct = (await authed(t.app, user, 'GET', '/api/account')).json() as {
       balances: { asset: string; available: string }[];
     };
     const tbt = acct.balances.find((b) => b.asset === 'TBT');
     // user's resting bid filled AT THEIR price (maker), exactly like the venue
-    expect(tbt?.available).toBe('0.001');
+    expect(tbt?.available).toBe('0.05');
   });
 
   it('mirror funds itself; conservation stays intact (fee account untouched by deposits)', async () => {

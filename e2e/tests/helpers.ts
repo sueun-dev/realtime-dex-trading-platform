@@ -11,11 +11,12 @@ export async function connectWallet(page: Page): Promise<void> {
   await expect(page.locator('.wallet-btn')).toContainText(/^0x/, { timeout: 15_000 });
 }
 
-/** Claim the demo funds and wait until they show in the balances table. */
+/** Claim the demo USDC collateral and wait until it shows in the balances table. */
 export async function claimFaucet(page: Page): Promise<void> {
   await openTab(page, '잔고');
   await page.getByRole('button', { name: '테스트 자금 받기' }).click();
-  await expect(page.locator('.data-table')).toContainText('100,000,000');
+  await expect(page.locator('.data-table')).toContainText('USDC');
+  await expect(page.locator('.data-table')).toContainText('100,000');
 }
 
 export async function expectToast(page: Page, text: string): Promise<void> {

@@ -145,8 +145,10 @@ export interface AccountSummary {
   marginUsed: bigint;
 }
 
-export const SPOT_QUOTE = 'KRW';
+/** A DEX settles in a stablecoin — every market quotes/collateralizes in USDC. */
+export const SPOT_QUOTE = 'USDC';
 export const PERP_QUOTE = 'USDC';
+export const COLLATERAL = 'USDC';
 export const FEE_ACCOUNT = '__fees__';
 /** Internal clearinghouse book-entry account for perp PnL cash flows (may go negative). */
 export const CLEARING_ACCOUNT = '__clearing__';
@@ -157,5 +159,5 @@ export const SPOT_TAKER_FEE_BPS = 2;
 export const PERP_MAKER_FEE_BPS = 2;
 export const PERP_TAKER_FEE_BPS = 2;
 
-export const FAUCET_KRW = 100_000_000n * 10n ** 8n; // ₩100,000,000
+/** Single demo collateral: $100,000 USDC, used for both spot and perps. */
 export const FAUCET_USDC = 100_000n * 10n ** 8n; // $100,000

@@ -4,7 +4,7 @@ import { divRound, feeOn, fromUnits, mulDiv, mulUnits, roundToLot, roundToTick, 
 import type { OrderType, Side, TimeInForce } from '@dex/shared';
 import { api, koMessage } from '../lib/api.js';
 import type { PlaceOrderBody } from '../lib/api.js';
-import { formatKRW, formatQty } from '../lib/format.js';
+import { formatAmount, formatQty } from '../lib/format.js';
 import { useAuthStore } from '../lib/auth.js';
 import { useBookStore } from '../stores/book.js';
 import { useMarketStore } from '../stores/market.js';
@@ -266,17 +266,17 @@ export function OrderForm() {
         <div className="summary-row">
           <span className="dim">주문금액</span>
           <span data-testid="notional-value">
-            {notional !== null ? `${formatKRW(notional)} ${market.quote}` : '–'}
+            {notional !== null ? `${formatAmount(notional)} ${market.quote}` : '–'}
           </span>
         </div>
         <div className="summary-row">
           <span className="dim">수수료</span>
-          <span data-testid="fee-value">{fee !== null ? `${formatKRW(fee)} ${market.quote}` : '–'}</span>
+          <span data-testid="fee-value">{fee !== null ? `${formatAmount(fee)} ${market.quote}` : '–'}</span>
         </div>
         {isPerp && (
           <div className="summary-row">
             <span className="dim">필요 증거금</span>
-            <span data-testid="margin-value">{margin !== null ? `${formatKRW(margin)} USDC` : '–'}</span>
+            <span data-testid="margin-value">{margin !== null ? `${formatAmount(margin)} USDC` : '–'}</span>
           </div>
         )}
       </div>

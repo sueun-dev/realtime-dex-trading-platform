@@ -10,7 +10,7 @@ import {
   type TestUser,
 } from './helpers.js';
 
-const M = TEST_SPOT.id;
+const M = TEST_SPOT.id; // TBT-USDC, tick 0.01, lot 0.001, minNotional 1, maker 5bps / taker 10bps
 
 let t: TestApp;
 let alice: TestUser; // maker (seeded with TBT)
@@ -39,17 +39,18 @@ afterAll(async () => {
 });
 
 describe('faucet', () => {
-  it('claims once, then 409', async () => {
+  it('claims once, then 409 — a single USDC collateral, no fiat', async () => {
     const again = await authed(t.app, alice, 'POST', '/api/account/faucet');
     expect(again.statusCode).toBe(409);
     expect((again.json() as Wire)['error']).toMatchObject({ code: 'FAUCET_ALREADY_CLAIMED' });
     const account = (await authed(t.app, alice, 'GET', '/api/account')).json() as Wire;
-    expect(bal(account, 'KRW').available).toBe('100000000');
     expect(bal(account, 'USDC').available).toBe('100000');
+    // no KRW (or any fiat) ever exists on the exchange
+    expect((account['balances'] as { asset: string }[]).some((b) => b.asset === 'KRW')).toBe(false);
   });
 });
 
-describe('spot trade lifecycle (maker/taker, exact fees)', () => {
+describe('spot trade lifecycle (maker/taker, exact USDC fees)', () => {
   let makerOrderId = '';
 
   it('maker postOnly ask rests and shows in the book', async () => {
@@ -57,7 +58,7 @@ describe('spot trade lifecycle (maker/taker, exact fees)', () => {
       marketId: M,
       side: 'sell',
       type: 'limit',
-      price: '10000000',
+      price: '100',
       qty: '0.5',
       tif: 'GTC',
       postOnly: true,
@@ -70,7 +71,7 @@ describe('spot trade lifecycle (maker/taker, exact fees)', () => {
     const book = (
       await t.app.inject({ method: 'GET', url: `/api/markets/${M}/orderbook?depth=5` })
     ).json() as { asks: { price: string; qty: string }[]; bids: unknown[] };
-    expect(book.asks).toEqual([{ price: '10000000', qty: '0.5' }]);
+    expect(book.asks).toEqual([{ price: '100', qty: '0.5' }]);
     expect(book.bids).toEqual([]);
 
     const account = (await authed(t.app, alice, 'GET', '/api/account')).json() as Wire;
@@ -82,7 +83,7 @@ describe('spot trade lifecycle (maker/taker, exact fees)', () => {
       marketId: M,
       side: 'buy',
       type: 'limit',
-      price: '10000000',
+      price: '100',
       qty: '0.3',
       tif: 'GTC',
     });
@@ -91,14 +92,14 @@ describe('spot trade lifecycle (maker/taker, exact fees)', () => {
     expect(order['status']).toBe('filled');
     expect(order['filledQty']).toBe('0.3');
 
-    // taker bob: pays 3,000,000 notional + 3,000 fee (10 bps)
+    // taker bob: pays 30 notional + 0.03 fee (10 bps)
     const bobAcct = (await authed(t.app, bob, 'GET', '/api/account')).json() as Wire;
-    expect(bal(bobAcct, 'KRW')).toMatchObject({ available: '96997000', locked: '0' });
+    expect(bal(bobAcct, 'USDC')).toMatchObject({ available: '99969.97', locked: '0' });
     expect(bal(bobAcct, 'TBT')).toMatchObject({ available: '0.3', locked: '0' });
 
-    // maker alice: receives 3,000,000 − 1,500 fee (5 bps); 0.2 TBT still locked
+    // maker alice: receives 30 − 0.015 fee (5 bps); 0.2 TBT still locked
     const aliceAcct = (await authed(t.app, alice, 'GET', '/api/account')).json() as Wire;
-    expect(bal(aliceAcct, 'KRW')).toMatchObject({ available: '102998500', locked: '0' });
+    expect(bal(aliceAcct, 'USDC')).toMatchObject({ available: '100029.985', locked: '0' });
     expect(bal(aliceAcct, 'TBT')).toMatchObject({ available: '9.5', locked: '0.2' });
   });
 
@@ -107,22 +108,22 @@ describe('spot trade lifecycle (maker/taker, exact fees)', () => {
       await t.app.inject({ method: 'GET', url: `/api/markets/${M}/trades` })
     ).json() as Wire[];
     expect(trades).toHaveLength(1);
-    expect(trades[0]).toMatchObject({ price: '10000000', qty: '0.3', takerSide: 'buy' });
+    expect(trades[0]).toMatchObject({ price: '100', qty: '0.3', takerSide: 'buy' });
 
     const aliceFills = (await authed(t.app, alice, 'GET', '/api/fills')).json() as Wire[];
     expect(aliceFills).toHaveLength(1);
-    expect(aliceFills[0]).toMatchObject({ side: 'sell', role: 'maker', fee: '1500', qty: '0.3' });
+    expect(aliceFills[0]).toMatchObject({ side: 'sell', role: 'maker', fee: '0.015', qty: '0.3' });
 
     const bobFills = (await authed(t.app, bob, 'GET', '/api/fills')).json() as Wire[];
-    expect(bobFills[0]).toMatchObject({ side: 'buy', role: 'taker', fee: '3000', qty: '0.3' });
+    expect(bobFills[0]).toMatchObject({ side: 'buy', role: 'taker', fee: '0.03', qty: '0.3' });
   });
 
   it('house commission lands on the fee account (stats endpoint)', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/api/stats/fees' });
     expect(res.statusCode).toBe(200);
     const fees = res.json() as { asset: string; available: string }[];
-    // maker 1,500 + taker 3,000 from the single 0.3 @ 10,000,000 fill
-    expect(fees.find((f) => f.asset === 'KRW')).toMatchObject({ available: '4500' });
+    // maker 0.015 + taker 0.03 from the single 0.3 @ 100 fill
+    expect(fees.find((f) => f.asset === 'USDC')).toMatchObject({ available: '0.045' });
   });
 
   it('open orders list shows the remainder; cancel releases the exact lock', async () => {
@@ -148,7 +149,7 @@ describe('spot trade lifecycle (maker/taker, exact fees)', () => {
       marketId: M,
       side: 'sell',
       type: 'limit',
-      price: '10000000',
+      price: '100',
       qty: '0.2',
       tif: 'GTC',
     });
@@ -168,37 +169,43 @@ describe('order validation (engine + zod, exact error codes)', () => {
   const cases: { name: string; body: Record<string, unknown>; status: number; code: string }[] = [
     {
       name: 'off-tick price',
-      body: { marketId: M, side: 'buy', type: 'limit', price: '10000500', qty: '0.1', tif: 'GTC' },
+      body: { marketId: M, side: 'buy', type: 'limit', price: '100.005', qty: '0.1', tif: 'GTC' },
       status: 400,
       code: 'TICK_SIZE',
     },
     {
       name: 'off-lot qty',
-      body: { marketId: M, side: 'buy', type: 'limit', price: '10000000', qty: '0.00005', tif: 'GTC' },
+      body: { marketId: M, side: 'buy', type: 'limit', price: '100', qty: '0.00005', tif: 'GTC' },
       status: 400,
       code: 'LOT_SIZE',
     },
     {
       name: 'below min notional',
-      body: { marketId: M, side: 'buy', type: 'limit', price: '1000', qty: '0.0001', tif: 'GTC' },
+      body: { marketId: M, side: 'buy', type: 'limit', price: '0.01', qty: '0.001', tif: 'GTC' },
       status: 400,
       code: 'MIN_NOTIONAL',
     },
     {
       name: 'unknown market',
-      body: { marketId: 'KRW-NOPE', side: 'buy', type: 'limit', price: '1000', qty: '1', tif: 'GTC' },
+      body: { marketId: 'NOPE-USDC', side: 'buy', type: 'limit', price: '1', qty: '1', tif: 'GTC' },
+      status: 404,
+      code: 'MARKET_NOT_FOUND',
+    },
+    {
+      name: 'fiat market no longer exists',
+      body: { marketId: 'KRW-BTC', side: 'buy', type: 'limit', price: '1', qty: '1', tif: 'GTC' },
       status: 404,
       code: 'MARKET_NOT_FOUND',
     },
     {
       name: 'market order with GTC',
-      body: { marketId: M, side: 'buy', type: 'market', price: '10000000', qty: '0.1', tif: 'GTC' },
+      body: { marketId: M, side: 'buy', type: 'market', price: '100', qty: '0.1', tif: 'GTC' },
       status: 422,
       code: 'INVALID_ORDER',
     },
     {
       name: 'postOnly market order',
-      body: { marketId: M, side: 'buy', type: 'market', price: '10000000', qty: '0.1', tif: 'IOC', postOnly: true },
+      body: { marketId: M, side: 'buy', type: 'market', price: '100', qty: '0.1', tif: 'IOC', postOnly: true },
       status: 422,
       code: 'INVALID_ORDER',
     },
@@ -210,13 +217,13 @@ describe('order validation (engine + zod, exact error codes)', () => {
     },
     {
       name: 'negative qty',
-      body: { marketId: M, side: 'buy', type: 'limit', price: '10000000', qty: '-1', tif: 'GTC' },
+      body: { marketId: M, side: 'buy', type: 'limit', price: '100', qty: '-1', tif: 'GTC' },
       status: 422,
       code: 'INVALID_ORDER',
     },
     {
       name: 'insufficient balance',
-      body: { marketId: M, side: 'sell', type: 'limit', price: '10000000', qty: '5000', tif: 'GTC' },
+      body: { marketId: M, side: 'sell', type: 'limit', price: '100', qty: '5000', tif: 'GTC' },
       status: 400,
       code: 'INSUFFICIENT_BALANCE',
     },
@@ -239,7 +246,7 @@ describe('order validation (engine + zod, exact error codes)', () => {
       marketId: M,
       side: 'buy',
       type: 'limit',
-      price: '10000000',
+      price: '100',
       qty: '0.2',
       tif: 'FOK',
     });
@@ -259,7 +266,7 @@ describe('order validation (engine + zod, exact error codes)', () => {
       marketId: M,
       side: 'buy',
       type: 'limit',
-      price: '10000000',
+      price: '100',
       qty: '0.1',
       tif: 'GTC',
       postOnly: true,

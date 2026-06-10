@@ -92,7 +92,7 @@ describe('websocket hub', () => {
       marketId: M,
       side: 'sell',
       type: 'limit',
-      price: '10000000',
+      price: '100',
       qty: '0.5',
       tif: 'GTC',
     });
@@ -102,7 +102,7 @@ describe('websocket hub', () => {
       return d.asks.length === 1 && d.asks[0]!.qty === '0.5';
     });
     expect((withAsk.data as { asks: unknown[] }).asks).toEqual([
-      { price: '10000000', qty: '0.5' },
+      { price: '100', qty: '0.5' },
     ]);
     probe.close();
   });
@@ -119,7 +119,7 @@ describe('websocket hub', () => {
       marketId: M,
       side: 'buy',
       type: 'limit',
-      price: '10000000',
+      price: '100',
       qty: '0.2',
       tif: 'GTC',
     });
@@ -127,7 +127,7 @@ describe('websocket hub', () => {
 
     const tradeFrame = await probe.waitFor((f) => f.channel === `trades:${M}`);
     const trades = tradeFrame.data as { price: string; qty: string; takerSide: string }[];
-    expect(trades[0]).toMatchObject({ price: '10000000', qty: '0.2', takerSide: 'buy' });
+    expect(trades[0]).toMatchObject({ price: '100', qty: '0.2', takerSide: 'buy' });
 
     const userFrame = await probe.waitFor((f) => f.channel === 'user');
     expect(typeof (userFrame.data as { type: string }).type).toBe('string');
@@ -151,7 +151,7 @@ describe('websocket hub', () => {
 
     t.svc.priceCache.setTicker({
       marketId: M,
-      price: toUnits('10050000'),
+      price: toUnits('100.5'),
       change24h: toUnits('0.012'),
       high24h: toUnits('10100000'),
       low24h: toUnits('9900000'),
@@ -160,7 +160,7 @@ describe('websocket hub', () => {
     });
 
     const tick = await probe.waitFor((f) => f.channel === `ticker:${M}`);
-    expect(tick.data).toMatchObject({ marketId: M, price: '10050000', change24h: '0.012' });
+    expect(tick.data).toMatchObject({ marketId: M, price: '100.5', change24h: '0.012' });
     const all = await probe.waitFor((f) => f.channel === 'allTickers');
     expect(Array.isArray(all.data)).toBe(true);
     probe.close();
@@ -173,7 +173,7 @@ describe('websocket hub', () => {
     t.svc.hub.publishExternalTrade({
       id: 'u1234567890',
       marketId: M,
-      price: toUnits('10050000'),
+      price: toUnits('100.5'),
       qty: toUnits('0.025'),
       takerSide: 'sell',
       ts: Date.now(),
@@ -185,7 +185,7 @@ describe('websocket hub', () => {
     const print = (frame.data as { id: string; price: string; qty: string; takerSide: string }[]).find(
       (x) => x.id === 'u1234567890',
     )!;
-    expect(print).toMatchObject({ price: '10050000', qty: '0.025', takerSide: 'sell' });
+    expect(print).toMatchObject({ price: '100.5', qty: '0.025', takerSide: 'sell' });
 
     // late subscriber gets it from the ring
     const late = new WsProbe(base);
@@ -228,8 +228,8 @@ describe('websocket hub', () => {
       marketId: M,
       side: 'buy',
       type: 'limit',
-      price: '9000000',
-      qty: '0.001',
+      price: '90',
+      qty: '0.05',
       tif: 'GTC',
     });
     await new Promise((r) => setTimeout(r, 300));

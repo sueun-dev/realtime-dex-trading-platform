@@ -18,7 +18,7 @@ export const useMarketStore = create<MarketState>()((set) => ({
   markets: [],
   byId: {},
   tickers: {},
-  selectedId: 'KRW-BTC',
+  selectedId: 'BTC-USDC',
   selectorOpen: false,
 
   setMarkets: (markets) =>

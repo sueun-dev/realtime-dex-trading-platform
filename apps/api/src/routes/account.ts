@@ -1,5 +1,5 @@
 import type { FastifyInstance, preHandlerAsyncHookHandler } from 'fastify';
-import { DexError, FAUCET_KRW, FAUCET_USDC, jsonSafe, zLeverageRequest } from '@dex/shared';
+import { DexError, FAUCET_USDC, jsonSafe, zLeverageRequest } from '@dex/shared';
 import type { Services } from '../services.js';
 
 export function registerAccountRoutes(
@@ -18,13 +18,7 @@ export function registerAccountRoutes(
     if (user.faucetClaimedAt !== null) {
       throw new DexError('FAUCET_ALREADY_CLAIMED', 'faucet already claimed');
     }
-    await pipeline.exec(() => {
-      const now = Date.now();
-      return [
-        ...engine.deposit(req.userId, 'KRW', FAUCET_KRW, now),
-        ...engine.deposit(req.userId, 'USDC', FAUCET_USDC, now),
-      ];
-    });
+    await pipeline.exec(() => engine.deposit(req.userId, 'USDC', FAUCET_USDC, Date.now()));
     await repos.users.setFaucetClaimed(req.userId, Date.now());
     return { ok: true };
   });

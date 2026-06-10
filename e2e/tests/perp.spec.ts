@@ -21,7 +21,7 @@ test.afterAll(async () => {
 
 const openTab = (name: string): Promise<void> => openTabIn(page, name);
 
-test('the KRW-BTC orderbook moves on its own (it is the live venue book)', async () => {
+test('the BTC-USDC orderbook moves on its own (it is the live venue book)', async () => {
   await expect(page.getByTestId('ask-row-0')).toBeVisible();
   const snapshot = async (): Promise<string> => {
     const parts: string[] = [];

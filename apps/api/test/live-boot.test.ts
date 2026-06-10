@@ -11,6 +11,7 @@ let t: TestApp;
 interface MarketWire {
   id: string;
   type: string;
+  quote: string;
   koreanName: string | null;
   tickSize: string;
   lotSize: string;
@@ -26,7 +27,7 @@ afterAll(async () => {
 });
 
 describe('live universe boot (real Upbit + Hyperliquid data)', () => {
-  it('serves the full real Korean spot universe + perps', async () => {
+  it('serves the real USDC spot universe + perps, with NO fiat', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/api/markets' });
     expect(res.statusCode).toBe(200);
     const markets = res.json() as MarketWire[];
@@ -34,24 +35,29 @@ describe('live universe boot (real Upbit + Hyperliquid data)', () => {
     const perp = markets.filter((m) => m.type === 'perp');
     expect(spot.length).toBeGreaterThanOrEqual(80);
     expect(perp.length).toBeGreaterThanOrEqual(15);
+    // a DEX has no fiat — every market quotes in USDC, no KRW anywhere
+    for (const m of markets) {
+      expect(m.quote).toBe('USDC');
+      expect(m.id.includes('KRW')).toBe(false);
+    }
 
-    const btc = markets.find((m) => m.id === 'KRW-BTC');
+    const btc = markets.find((m) => m.id === 'BTC-USDC');
     expect(btc).toBeDefined();
     expect(btc!.koreanName).toBe('비트코인');
     expect(toUnits(btc!.tickSize)).toBeGreaterThan(0n);
-    // boot seeds real tickers — BTC must have a live price
+    // boot seeds real tickers — BTC must have a live USD price (tens of thousands)
     expect(btc!.ticker).not.toBeNull();
-    expect(toUnits(btc!.ticker!.price)).toBeGreaterThan(toUnits('1000000')); // > ₩1,000,000
+    expect(toUnits(btc!.ticker!.price)).toBeGreaterThan(toUnits('1000')); // > $1,000
 
     const btcPerp = markets.find((m) => m.id === 'BTC-PERP');
     expect(btcPerp).toBeDefined();
     expect(btcPerp!.maxLeverage).toBeGreaterThanOrEqual(10);
   }, 30_000);
 
-  it('serves real KRW-BTC candles (Upbit) with sane OHLC', async () => {
+  it('serves real BTC-USDC candles (Upbit USDT book) with sane OHLC', async () => {
     const res = await t.app.inject({
       method: 'GET',
-      url: '/api/markets/KRW-BTC/candles?interval=1m&limit=50',
+      url: '/api/markets/BTC-USDC/candles?interval=1m&limit=50',
     });
     expect(res.statusCode).toBe(200);
     const candles = res.json() as { t: number; o: string; h: string; l: string; c: string }[];
@@ -66,8 +72,9 @@ describe('live universe boot (real Upbit + Hyperliquid data)', () => {
       expect(l <= o && l <= cl).toBe(true);
       expect(l > 0n).toBe(true);
     }
-    // recent: newest candle within the last 10 minutes
-    expect(Date.now() - candles.at(-1)!.t).toBeLessThan(10 * 60_000);
+    // recent live data (not a stale fixture). The Upbit USDT-BTC book trades
+    // less often than KRW-BTC, so minute buckets can have gaps — allow 2h.
+    expect(Date.now() - candles.at(-1)!.t).toBeLessThan(2 * 60 * 60_000);
   }, 30_000);
 
   it('serves real BTC-PERP candles (Hyperliquid)', async () => {

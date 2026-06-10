@@ -14,8 +14,8 @@ function groupDecimalString(s: string): string {
   return `${neg ? '-' : ''}${grouped}${frac !== undefined && frac.length > 0 ? `.${frac}` : ''}`;
 }
 
-/** KRW-style amount: thousands separators, trailing zeros trimmed. */
-export function formatKRW(units: bigint): string {
+/** Amount with thousands separators, trailing zeros trimmed (currency-agnostic). */
+export function formatAmount(units: bigint): string {
   return groupDecimalString(fromUnits(units));
 }
 

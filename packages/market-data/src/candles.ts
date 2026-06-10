@@ -1,6 +1,7 @@
 import type { Candle, CandleInterval } from '@dex/shared';
 import type { HyperliquidRest } from './hyperliquid.js';
 import type { UpbitRest } from './upbit.js';
+import { upbitCodeForSpotMarket } from './universe.js';
 
 export const INTERVAL_MS: Record<CandleInterval, number> = {
   '1m': 60_000,
@@ -87,8 +88,9 @@ export class CandleService {
   }
 
   async #fetch(marketId: string, interval: CandleInterval, limit: number): Promise<Candle[]> {
-    if (marketId.startsWith('KRW-')) {
-      return this.#upbit.fetchCandles(marketId, interval, limit);
+    if (marketId.endsWith('-USDC')) {
+      // spot: real candles from the corresponding Upbit USDT market
+      return this.#upbit.fetchCandles(upbitCodeForSpotMarket(marketId), interval, limit);
     }
     if (marketId.endsWith('-PERP')) {
       const coin = marketId.slice(0, -'-PERP'.length);

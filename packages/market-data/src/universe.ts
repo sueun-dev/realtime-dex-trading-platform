@@ -38,30 +38,42 @@ export function upbitKrwTick(price: bigint): bigint {
   return toUnits('0.00000001'); // 1n — official "< 0.00001 KRW" band
 }
 
+/** Upbit source code (`USDT-BTC`) for an internal spot market id (`BTC-USDC`). */
+export function upbitCodeForSpotMarket(marketId: string): string {
+  const base = marketId.slice(0, marketId.lastIndexOf('-'));
+  return `USDT-${base}`;
+}
+
+/** Internal spot market id (`BTC-USDC`) for an Upbit USDT code (`USDT-BTC`). */
+export function spotMarketIdForUpbitCode(code: string): string {
+  return `${code.slice('USDT-'.length)}-USDC`;
+}
+
 /**
- * Spot market configs from the real Upbit market list (KRW-quoted only).
- * Tick size derives from the current price when a ticker is supplied.
- * WARNING: without a ticker it falls back to a 1-KRW tick, which is far too
- * coarse for sub-1,000-KRW coins — production boot paths must pass live
- * tickers to get faithful Upbit ticks.
+ * Spot market configs from the real Upbit market list — a DEX settles in a
+ * stablecoin, so we mirror Upbit's USDT order books (real stablecoin-quoted
+ * depth) and present them as `<BASE>-USDC` (USDT and USDC are both $1 pegs;
+ * the price reference is identical). Tick derives from the live price (5
+ * significant figures); the book mirror snaps any off-grid venue prices.
  */
 export function buildSpotMarkets(rawUpbitMarkets: UpbitMarket[], tickers?: Ticker[]): MarketConfig[] {
   const byMarket = new Map<string, Ticker>();
   for (const t of tickers ?? []) byMarket.set(t.marketId, t);
   const out: MarketConfig[] = [];
   for (const m of rawUpbitMarkets) {
-    if (!m.market.startsWith('KRW-')) continue;
+    if (!m.market.startsWith('USDT-')) continue;
+    if (m.market === 'USDT-USDT') continue;
     const ticker = byMarket.get(m.market);
     out.push({
-      id: m.market,
+      id: spotMarketIdForUpbitCode(m.market),
       type: 'spot',
-      base: m.market.slice('KRW-'.length),
-      quote: 'KRW',
+      base: m.market.slice('USDT-'.length),
+      quote: 'USDC',
       koreanName: m.korean_name,
       englishName: m.english_name,
-      tickSize: ticker ? upbitKrwTick(ticker.price) : toUnits('1'),
+      tickSize: ticker ? perpTickFromMid(ticker.price) : toUnits('0.0001'),
       lotSize: 1n,
-      minNotional: toUnits('5000'),
+      minNotional: toUnits('1'),
       makerFeeBps: SPOT_MAKER_FEE_BPS,
       takerFeeBps: SPOT_TAKER_FEE_BPS,
       maxLeverage: 1,

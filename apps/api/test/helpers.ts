@@ -6,17 +6,21 @@ import { buildApp } from '../src/server.js';
 
 export const u = toUnits;
 
-/** Synthetic test markets — deterministic ticks/lots so assertions are exact. */
+/**
+ * Synthetic USDC-quoted test markets — deterministic ticks/lots so assertions
+ * are exact. Distinct maker/taker fees (5/10 bps) verify the engine reads
+ * per-market fees rather than a global constant.
+ */
 export const TEST_SPOT: MarketConfig = {
-  id: 'KRW-TBT',
+  id: 'TBT-USDC',
   type: 'spot',
   base: 'TBT',
-  quote: 'KRW',
+  quote: 'USDC',
   koreanName: '테스트비트',
   englishName: 'Testbit',
-  tickSize: u(1000),
-  lotSize: u('0.0001'),
-  minNotional: u(5000),
+  tickSize: u('0.01'),
+  lotSize: u('0.001'),
+  minNotional: u('1'),
   makerFeeBps: 5,
   takerFeeBps: 10,
   maxLeverage: 1,

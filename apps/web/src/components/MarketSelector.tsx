@@ -7,7 +7,7 @@ type FilterTab = 'all' | 'spot' | 'perp';
 
 const TABS: { key: FilterTab; label: string }[] = [
   { key: 'all', label: '전체' },
-  { key: 'spot', label: 'KRW' },
+  { key: 'spot', label: 'USDC' },
   { key: 'perp', label: 'PERP' },
 ];
 
@@ -84,7 +84,7 @@ export function MarketSelector() {
                   <span className="market-row-symbol">
                     {m.base}/{m.quote}
                     <span className={`badge mini ${m.type === 'perp' ? 'perp' : 'spot'}`}>
-                      {m.type === 'perp' ? 'PERP' : 'KRW'}
+                      {m.type === 'perp' ? 'PERP' : 'USDC'}
                     </span>
                   </span>
                   <span className="dim market-row-name">{m.koreanName ?? m.englishName ?? ''}</span>

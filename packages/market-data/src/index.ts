@@ -24,7 +24,14 @@ export {
   type HlTrade,
   type HyperliquidWsOptions,
 } from './hyperliquidWs.js';
-export { buildSpotMarkets, buildPerpMarkets, upbitKrwTick, perpTickFromMid } from './universe.js';
+export {
+  buildSpotMarkets,
+  buildPerpMarkets,
+  upbitKrwTick,
+  perpTickFromMid,
+  upbitCodeForSpotMarket,
+  spotMarketIdForUpbitCode,
+} from './universe.js';
 export { PriceCache } from './priceCache.js';
 export { CandleService, INTERVAL_MS, type CandleServiceOptions } from './candles.js';
 export { numToUnits } from './util.js';

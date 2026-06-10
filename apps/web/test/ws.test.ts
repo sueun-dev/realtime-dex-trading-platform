@@ -63,18 +63,18 @@ describe('WsClient', () => {
     const h1 = vi.fn();
     const h2 = vi.fn();
     const other = vi.fn();
-    const un1 = client.subscribe('orderbook:KRW-BTC', h1);
+    const un1 = client.subscribe('orderbook:BTC-USDC', h1);
     expect(sock.sent).toHaveLength(0); // socket not open yet — frame deferred to onopen
 
     sock.open();
-    expect(frames(sock)).toEqual([{ op: 'subscribe', channel: 'orderbook:KRW-BTC', market: 'KRW-BTC' }]);
+    expect(frames(sock)).toEqual([{ op: 'subscribe', channel: 'orderbook:BTC-USDC', market: 'BTC-USDC' }]);
 
-    const un2 = client.subscribe('orderbook:KRW-BTC', h2);
+    const un2 = client.subscribe('orderbook:BTC-USDC', h2);
     expect(sock.sent).toHaveLength(1); // ref-counted: no duplicate subscribe frame
-    client.subscribe('trades:KRW-BTC', other);
+    client.subscribe('trades:BTC-USDC', other);
     expect(sock.sent).toHaveLength(2);
 
-    sock.message({ channel: 'orderbook:KRW-BTC', data: { bids: [], asks: [] }, seq: 7 });
+    sock.message({ channel: 'orderbook:BTC-USDC', data: { bids: [], asks: [] }, seq: 7 });
     expect(h1).toHaveBeenCalledWith({ bids: [], asks: [] }, 7);
     expect(h2).toHaveBeenCalledWith({ bids: [], asks: [] }, 7);
     expect(other).not.toHaveBeenCalled();
@@ -82,7 +82,7 @@ describe('WsClient', () => {
     un1();
     expect(sock.sent).toHaveLength(2); // one subscriber remains → no unsubscribe yet
     un2();
-    expect(frames(sock).at(-1)).toEqual({ op: 'unsubscribe', channel: 'orderbook:KRW-BTC', market: 'KRW-BTC' });
+    expect(frames(sock).at(-1)).toEqual({ op: 'unsubscribe', channel: 'orderbook:BTC-USDC', market: 'BTC-USDC' });
     const count = sock.sent.length;
     un2(); // idempotent
     expect(sock.sent).toHaveLength(count);
@@ -107,7 +107,7 @@ describe('WsClient', () => {
 
     sock1.open();
     expect(frames(sock1)[0]).toEqual({ op: 'auth', token: 'tkn' });
-    client.subscribe('trades:KRW-BTC', vi.fn());
+    client.subscribe('trades:BTC-USDC', vi.fn());
 
     // drop the connection → reconnect after the initial 500ms backoff
     sock1.close();
@@ -122,7 +122,7 @@ describe('WsClient', () => {
     // full resubscribe with auth first
     expect(frames(sock2)).toEqual([
       { op: 'auth', token: 'tkn' },
-      { op: 'subscribe', channel: 'trades:KRW-BTC', market: 'KRW-BTC' },
+      { op: 'subscribe', channel: 'trades:BTC-USDC', market: 'BTC-USDC' },
     ]);
 
     client.destroy();

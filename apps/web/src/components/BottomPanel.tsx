@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { absBig, divUnits, fromUnits, mulDiv, mulUnits, roundToTick } from '@dex/shared';
 import { api, koMessage } from '../lib/api.js';
 import type { PlaceOrderBody } from '../lib/api.js';
-import { formatKRW, formatPct, formatPrice, formatQty, formatTime } from '../lib/format.js';
+import { formatAmount, formatPct, formatPrice, formatQty, formatTime } from '../lib/format.js';
 import { useMarketStore } from '../stores/market.js';
 import { useUserStore } from '../stores/user.js';
 import { toast } from '../stores/toast.js';
@@ -76,10 +76,10 @@ export function PositionsTable() {
               <td>
                 <span className={`pnl ${cls}`} data-testid={`pnl-${p.marketId}`}>
                   {uPnl > 0n ? '+' : ''}
-                  {formatKRW(uPnl)} ({formatPct(roe)})
+                  {formatAmount(uPnl)} ({formatPct(roe)})
                 </span>
               </td>
-              <td>{formatKRW(p.margin)}</td>
+              <td>{formatAmount(p.margin)}</td>
               <td>{p.leverage}x</td>
               <td>
                 <button
@@ -195,7 +195,7 @@ export function FillsTable() {
               </td>
               <td>{formatPrice(f.price, tickSize)}</td>
               <td>{formatQty(f.qty)}</td>
-              <td>{f.fee !== null ? formatKRW(f.fee) : '–'}</td>
+              <td>{f.fee !== null ? formatAmount(f.fee) : '–'}</td>
             </tr>
           );
         })}
@@ -253,8 +253,8 @@ export function BalancesTable() {
             {entries.map(([asset, b]) => (
               <tr key={asset}>
                 <td>{asset}</td>
-                <td>{formatKRW(b.available)}</td>
-                <td>{formatKRW(b.locked)}</td>
+                <td>{formatAmount(b.available)}</td>
+                <td>{formatAmount(b.locked)}</td>
               </tr>
             ))}
           </tbody>

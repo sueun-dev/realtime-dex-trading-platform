@@ -41,7 +41,7 @@ describe('durable restart: engine state rebuilt from the PGlite projection', () 
         marketId: TEST_SPOT.id,
         side: 'sell',
         type: 'limit',
-        price: '10000000',
+        price: '100',
         qty: '0.4',
         tif: 'GTC',
       });
@@ -79,7 +79,7 @@ describe('durable restart: engine state rebuilt from the PGlite projection', () 
       const book = (
         await t2.app.inject({ method: 'GET', url: `/api/markets/${TEST_SPOT.id}/orderbook` })
       ).json() as { asks: unknown[] };
-      expect(book.asks).toEqual([{ price: '10000000', qty: '0.4' }]);
+      expect(book.asks).toEqual([{ price: '100', qty: '0.4' }]);
 
       // JWT from session 1 still works (same secret), state identical
       const acct = (await authed(t2.app, alice, 'GET', '/api/account')).json() as Wire;

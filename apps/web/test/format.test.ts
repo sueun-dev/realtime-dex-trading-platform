@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toUnits } from '@dex/shared';
 import {
-  formatKRW,
+  formatAmount,
   formatPct,
   formatPrice,
   formatQty,
@@ -10,29 +10,29 @@ import {
   truncateAddress,
 } from '../src/lib/format.js';
 
-describe('formatKRW', () => {
+describe('formatAmount', () => {
   it('formats zero', () => {
-    expect(formatKRW(0n)).toBe('0');
+    expect(formatAmount(0n)).toBe('0');
   });
 
   it('adds thousands separators', () => {
-    expect(formatKRW(toUnits('93130000'))).toBe('93,130,000');
+    expect(formatAmount(toUnits('93130000'))).toBe('93,130,000');
   });
 
   it('handles negatives with separators and decimals', () => {
-    expect(formatKRW(toUnits('-1234.5'))).toBe('-1,234.5');
+    expect(formatAmount(toUnits('-1234.5'))).toBe('-1,234.5');
   });
 
   it('handles tiny sub-unit values', () => {
-    expect(formatKRW(123n)).toBe('0.00000123');
+    expect(formatAmount(123n)).toBe('0.00000123');
   });
 
   it('handles huge values without precision loss', () => {
-    expect(formatKRW(toUnits('123456789012345'))).toBe('123,456,789,012,345');
+    expect(formatAmount(toUnits('123456789012345'))).toBe('123,456,789,012,345');
   });
 
   it('trims trailing zeros', () => {
-    expect(formatKRW(toUnits('100.10000000'))).toBe('100.1');
+    expect(formatAmount(toUnits('100.10000000'))).toBe('100.1');
   });
 });
 

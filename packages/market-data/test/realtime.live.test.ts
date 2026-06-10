@@ -30,14 +30,14 @@ function assertBook(bids: BookLevel[], asks: BookLevel[]): void {
 }
 
 describe('live real-venue depth and prints', () => {
-  it('Upbit streams the real KRW-BTC orderbook (prices AND sizes)', async () => {
-    const ws = new UpbitWs(['KRW-BTC'], { types: ['orderbook'] });
+  it('Upbit streams the real USDT-BTC orderbook (prices AND sizes)', async () => {
+    const ws = new UpbitWs(['USDT-BTC'], { types: ['orderbook'] });
     cleanups.push(() => ws.close());
     ws.connect();
     const ob = await within<ExternalOrderbook>(25_000, 'Upbit orderbook frame', (resolve) =>
       ws.once('orderbook', resolve),
     );
-    expect(ob.marketId).toBe('KRW-BTC');
+    expect(ob.marketId).toBe('USDT-BTC');
     assertBook(ob.bids, ob.asks);
   }, 30_000);
 
@@ -60,14 +60,14 @@ describe('live real-venue depth and prints', () => {
   }, 75_000);
 
   it('UpbitWs.setCodes retargets the live subscription', async () => {
-    const ws = new UpbitWs(['KRW-BTC'], { types: ['orderbook'] });
+    const ws = new UpbitWs(['USDT-BTC'], { types: ['orderbook'] });
     cleanups.push(() => ws.close());
     ws.connect();
     await within(25_000, 'first orderbook frame', (resolve) => ws.once('orderbook', resolve));
-    ws.setCodes(['KRW-ETH']);
-    const eth = await within<ExternalOrderbook>(25_000, 'KRW-ETH frame after setCodes', (resolve) => {
+    ws.setCodes(['USDT-ETH']);
+    const eth = await within<ExternalOrderbook>(25_000, 'USDT-ETH frame after setCodes', (resolve) => {
       const handler = (ob: ExternalOrderbook): void => {
-        if (ob.marketId === 'KRW-ETH') {
+        if (ob.marketId === 'USDT-ETH') {
           ws.off('orderbook', handler);
           resolve(ob);
         }

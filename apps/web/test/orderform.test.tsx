@@ -3,7 +3,7 @@ import { fireEvent, screen } from '@testing-library/react';
 import { feeOn, mulUnits, toUnits } from '@dex/shared';
 import { OrderForm } from '../src/components/OrderForm.js';
 import { Toasts } from '../src/components/Toasts.js';
-import { formatKRW } from '../src/lib/format.js';
+import { formatAmount } from '../src/lib/format.js';
 import { useAuthStore } from '../src/lib/auth.js';
 import { useBookStore } from '../src/stores/book.js';
 import { useMarketStore } from '../src/stores/market.js';
@@ -23,9 +23,9 @@ function errJson(status: number, code: string): Response {
 }
 
 function seedSpot(): void {
-  seedMarkets([SPOT_BTC], 'KRW-BTC');
+  seedMarkets([SPOT_BTC], 'BTC-USDC');
   useBookStore.setState({
-    marketId: 'KRW-BTC',
+    marketId: 'BTC-USDC',
     bids: [{ price: toUnits('99000'), qty: toUnits('5') }],
     asks: [{ price: toUnits('100000'), qty: toUnits('5') }],
     seq: 1,
@@ -33,7 +33,7 @@ function seedSpot(): void {
   });
   useUserStore.setState({
     balances: {
-      KRW: { available: toUnits('1000000'), locked: 0n },
+      USDC: { available: toUnits('1000000'), locked: 0n },
       BTC: { available: toUnits('2'), locked: 0n },
     },
   });
@@ -95,7 +95,7 @@ describe('OrderForm percentage buttons', () => {
     renderWithQuery(<OrderForm />);
     fireEvent.change(screen.getByPlaceholderText('가격'), { target: { value: '100000' } });
     fireEvent.click(screen.getByRole('button', { name: '50%' }));
-    // budget 500,000 KRW / (100,000 + 100 fee) per BTC → 4.99500499 → lot 0.0001 → 4.995
+    // budget 500,000 USDC / (100,000 + 100 fee) per BTC → 4.99500499 → lot 0.0001 → 4.995
     expect(screen.getByPlaceholderText('수량')).toHaveValue('4.995');
     fireEvent.click(screen.getByRole('button', { name: '100%' }));
     expect(screen.getByPlaceholderText('수량')).toHaveValue('9.99');
@@ -118,10 +118,10 @@ describe('OrderForm summary', () => {
     fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '2' } });
     const notional = mulUnits(toUnits('2'), toUnits('100000'));
     const fee = feeOn(notional, SPOT_BTC.takerFeeBps);
-    expect(screen.getByTestId('notional-value')).toHaveTextContent(`${formatKRW(notional)} KRW`);
-    expect(screen.getByTestId('fee-value')).toHaveTextContent(`${formatKRW(fee)} KRW`);
-    expect(screen.getByTestId('notional-value')).toHaveTextContent('200,000 KRW');
-    expect(screen.getByTestId('fee-value')).toHaveTextContent('200 KRW');
+    expect(screen.getByTestId('notional-value')).toHaveTextContent(`${formatAmount(notional)} USDC`);
+    expect(screen.getByTestId('fee-value')).toHaveTextContent(`${formatAmount(fee)} USDC`);
+    expect(screen.getByTestId('notional-value')).toHaveTextContent('200,000 USDC');
+    expect(screen.getByTestId('fee-value')).toHaveTextContent('200 USDC');
   });
 
   it('shows perp required margin = notional / leverage', () => {
@@ -167,7 +167,7 @@ describe('OrderForm submission', () => {
     expect(init.method).toBe('POST');
     expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer test-token');
     expect(JSON.parse(init.body as string)).toEqual({
-      marketId: 'KRW-BTC',
+      marketId: 'BTC-USDC',
       side: 'buy',
       type: 'limit',
       price: '100000',
@@ -192,7 +192,7 @@ describe('OrderForm submission', () => {
     expect(await screen.findByText('주문이 접수되었습니다')).toBeInTheDocument();
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({
-      marketId: 'KRW-BTC',
+      marketId: 'BTC-USDC',
       side: 'buy',
       type: 'market',
       price: '105000', // best ask 100,000 × 1.05

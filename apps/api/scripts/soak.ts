@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     const address = `0x${c.repeat(40)}`;
     await services.repos.users.getOrCreate(address, Date.now());
     await services.pipeline.exec(() => [
-      ...services.engine.deposit(address, 'KRW', toUnits(10_000_000_000), Date.now()),
+      ...services.engine.deposit(address, 'USDC', toUnits(10_000_000_000), Date.now()),
       ...services.engine.deposit(address, 'BTC', toUnits(100), Date.now()),
     ]);
     traders.push({ address, token: await services.auth.issueToken(address) });
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     return res.json().catch(() => null);
   };
 
-  const M = 'KRW-BTC';
+  const M = 'BTC-USDC';
   const tick = services.engine.getMarket(M)!.tickSize;
   let nthAction = 0;
   const tradeTimer = setInterval(() => {

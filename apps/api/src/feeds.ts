@@ -5,7 +5,15 @@
  *  - 24h perp stats refreshed from real Hyperliquid 1h candles every 5 minutes
  *  - Upbit REST ticker poll every 30s as a WS-gap fallback
  */
-import { HyperliquidWs, UpbitWs, INTERVAL_MS, type HlTrade, type PublicTrade } from '@dex/market-data';
+import {
+  HyperliquidWs,
+  UpbitWs,
+  INTERVAL_MS,
+  spotMarketIdForUpbitCode,
+  upbitCodeForSpotMarket,
+  type HlTrade,
+  type PublicTrade,
+} from '@dex/market-data';
 import { divUnits, maxBig, minBig, type Ticker } from '@dex/shared';
 import { fetchTickersChunked, type Services, type Stoppable } from './services.js';
 
@@ -23,19 +31,23 @@ interface PerpStats {
 export function startFeeds(svc: Services): Stoppable {
   const { engine, pipeline, priceCache, hub, log } = svc;
   const markets = engine.getMarkets();
-  const spotCodes = markets.filter((m) => m.type === 'spot').map((m) => m.id);
+  const spots = markets.filter((m) => m.type === 'spot');
+  // subscribe Upbit by its native USDT codes; relabel back to <base>-USDC
+  const spotUpbitCodes = spots.map((m) => upbitCodeForSpotMarket(m.id));
   const perps = markets.filter((m) => m.type === 'perp');
   const perpByCoin = new Map(perps.map((m) => [m.base, m]));
   const stats = new Map<string, PerpStats>();
   const lastMark = new Map<string, { price: bigint; at: number }>();
 
   // ---- spot: Upbit websocket (tickers + REAL market prints) -------------------
-  const upbitWs = new UpbitWs(spotCodes);
-  upbitWs.on('ticker', (t: Ticker) => priceCache.setTicker(t));
+  const upbitWs = new UpbitWs(spotUpbitCodes);
+  upbitWs.on('ticker', (t: Ticker) =>
+    priceCache.setTicker({ ...t, marketId: spotMarketIdForUpbitCode(t.marketId) }),
+  );
   upbitWs.on('trade', (t: PublicTrade) =>
     hub.publishExternalTrade({
       id: `u${t.sequentialId}`,
-      marketId: t.marketId,
+      marketId: spotMarketIdForUpbitCode(t.marketId),
       price: t.price,
       qty: t.qty,
       takerSide: t.side,
@@ -125,9 +137,11 @@ export function startFeeds(svc: Services): Stoppable {
 
   // ---- spot REST fallback poll ------------------------------------------------
   const pollTimer = setInterval(() => {
-    void fetchTickersChunked(svc.upbit, spotCodes)
+    void fetchTickersChunked(svc.upbit, spotUpbitCodes)
       .then((tickers) => {
-        for (const t of tickers) priceCache.setTicker(t);
+        for (const t of tickers) {
+          priceCache.setTicker({ ...t, marketId: spotMarketIdForUpbitCode(t.marketId) });
+        }
       })
       .catch((e: unknown) => log(`spot ticker poll failed: ${String(e)}`));
   }, SPOT_POLL_MS);

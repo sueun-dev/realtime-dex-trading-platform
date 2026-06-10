@@ -42,8 +42,8 @@ describe(`${N * 2} concurrent orders`, () => {
           marketId: M,
           side: 'sell',
           type: 'limit',
-          price: String(10_000_000 + (i % 50) * 1000),
-          qty: '0.001',
+          price: ((10_000 + (i % 50)) / 100).toFixed(2), // 100.00 .. 100.49 (tick 0.01)
+          qty: '0.02',
           tif: 'GTC',
         }),
       ),
@@ -52,8 +52,8 @@ describe(`${N * 2} concurrent orders`, () => {
           marketId: M,
           side: 'buy',
           type: 'limit',
-          price: String(10_000_000 + (i % 30) * 1000),
-          qty: '0.001',
+          price: ((10_000 + (i % 30)) / 100).toFixed(2), // 100.00 .. 100.29
+          qty: '0.02',
           tif: 'GTC',
         }),
       ),
@@ -81,14 +81,14 @@ describe(`${N * 2} concurrent orders`, () => {
     for (const row of t.svc.engine.getAllBalances()) {
       totals.set(row.asset, (totals.get(row.asset) ?? 0n) + row.available + row.locked);
     }
-    expect(totals.get('KRW')).toBe(u(200_000_000)); // 2 faucets
-    expect(totals.get('USDC')).toBe(u(200_000));
+    expect(totals.get('USDC')).toBe(u(200_000)); // 2 faucets, single USDC collateral
     expect(totals.get('TBT')).toBe(u(10));
+    expect(totals.has('KRW')).toBe(false); // no fiat on the exchange
 
     // fee account holds EXACTLY the sum of all per-trade fees ever charged
     const feeRow = t.svc.engine
       .getBalances(FEE_ACCOUNT)
-      .find((b) => b.asset === 'KRW');
+      .find((b) => b.asset === 'USDC');
     const dbSum = await t.svc.db.pglite.query<{ total: string | null }>(
       'select sum(maker_fee + taker_fee) as total from trades',
     );

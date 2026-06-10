@@ -45,53 +45,53 @@ describe('upbitKrwTick — official KRW tick table (effective 2025-07-31), every
   });
 });
 
-describe('buildSpotMarkets', () => {
+describe('buildSpotMarkets — DEX spot from Upbit USDT books, presented as <BASE>-USDC', () => {
   const tickers: Ticker[] = [
     {
-      marketId: 'KRW-BTC',
-      price: toUnits('93151000'),
+      marketId: 'USDT-BTC',
+      price: toUnits('67500'),
       change24h: 643941n,
-      high24h: toUnits('93848000'),
-      low24h: toUnits('91500000'),
-      volume24h: toUnits('128096613472.80703'),
+      high24h: toUnits('68200'),
+      low24h: toUnits('66800'),
+      volume24h: toUnits('12809661.34'),
       ts: 1781102448112,
     },
     {
-      marketId: 'KRW-XRP',
-      price: toUnits('1687'),
+      marketId: 'USDT-XRP',
+      price: toUnits('2.4153'),
       change24h: -1113716n,
-      high24h: toUnits('1710'),
-      low24h: toUnits('1656'),
-      volume24h: toUnits('151139921563.96792238'),
+      high24h: toUnits('2.51'),
+      low24h: toUnits('2.39'),
+      volume24h: toUnits('15113992.96'),
       ts: 1781102447160,
     },
   ];
 
-  it('keeps only KRW-* markets and fills the MarketConfig contract', () => {
+  it('keeps only USDT-* markets (not KRW/BTC/self) and quotes them in USDC', () => {
     const configs = buildSpotMarkets(UPBIT_MARKETS_FIXTURE, tickers);
-    expect(configs.map((c) => c.id)).toEqual(['KRW-WAXP', 'KRW-CARV', 'KRW-BTC', 'KRW-ETH', 'KRW-XRP']);
-    const btc = configs.find((c) => c.id === 'KRW-BTC')!;
+    expect(configs.map((c) => c.id)).toEqual(['PEPE-USDC', 'WAXP-USDC', 'BTC-USDC', 'ETH-USDC', 'XRP-USDC']);
+    const btc = configs.find((c) => c.id === 'BTC-USDC')!;
     expect(btc).toEqual({
-      id: 'KRW-BTC',
+      id: 'BTC-USDC',
       type: 'spot',
       base: 'BTC',
-      quote: 'KRW',
+      quote: 'USDC',
       koreanName: '비트코인',
       englishName: 'Bitcoin',
-      tickSize: toUnits('1000'), // from live price 93,151,000
+      tickSize: toUnits('1'), // 5 sig figs from $67,500
       lotSize: 1n,
-      minNotional: toUnits('5000'),
+      minNotional: toUnits('1'),
       makerFeeBps: 2,
       takerFeeBps: 2,
       maxLeverage: 1,
     });
-    const xrp = configs.find((c) => c.id === 'KRW-XRP')!;
-    expect(xrp.tickSize).toBe(toUnits('1')); // 1,687 KRW → 1 KRW tick
+    const xrp = configs.find((c) => c.id === 'XRP-USDC')!;
+    expect(xrp.tickSize).toBe(toUnits('0.0001')); // 5 sig figs from $2.4153
   });
 
-  it('falls back to a 1 KRW tick when no ticker is available', () => {
+  it('falls back to a coarse tick when no ticker is available', () => {
     const configs = buildSpotMarkets(UPBIT_MARKETS_FIXTURE);
-    for (const c of configs) expect(c.tickSize).toBe(toUnits('1'));
+    for (const c of configs) expect(c.tickSize).toBe(toUnits('0.0001'));
   });
 });
 

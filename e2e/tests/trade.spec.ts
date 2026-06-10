@@ -21,20 +21,20 @@ test.afterAll(async () => {
 
 const openTab = (name: string): Promise<void> => openTabIn(page, name);
 
-test('loads the real Korean market universe with live prices', async () => {
+test('loads the real Korean coin universe quoted in USDC', async () => {
   const marketBtn = page.getByTestId('market-button');
-  await expect(marketBtn).toContainText('BTC/KRW');
+  await expect(marketBtn).toContainText('BTC/USDC');
   await expect(marketBtn).toContainText('비트코인');
 
-  // live BTC price in the top bar: ₩ tens of millions, comma-formatted
-  await expect(marketBtn).toContainText(/[0-9]{2,3},[0-9]{3},[0-9]{3}/);
+  // live BTC price in the top bar: $ tens of thousands, comma-formatted
+  await expect(marketBtn).toContainText(/[0-9]{2,3},[0-9]{3}/);
 
   // market selector: search by korean name finds Ethereum
   await marketBtn.click();
   const selector = page.getByTestId('market-selector');
   await expect(selector).toBeVisible();
   await selector.getByPlaceholder(/코인 검색/).fill('이더리움');
-  const ethRow = page.getByTestId('market-row').filter({ hasText: 'ETH/KRW' });
+  const ethRow = page.getByTestId('market-row').filter({ hasText: 'ETH/USDC' });
   await expect(ethRow).toBeVisible();
   await expect(ethRow).toContainText('이더리움');
   // korean-name search narrows 263 markets down to the ethereum family
@@ -87,7 +87,6 @@ test('connects a wallet via signature auth', async () => {
 
 test('claims faucet test funds', async () => {
   await claimFaucet(page);
-  await expect(page.locator('.data-table')).toContainText('KRW');
   await expect(page.locator('.data-table')).toContainText('USDC');
 });
 
@@ -110,23 +109,23 @@ test('REAL PURCHASE: market-buys BTC against live liquidity', async () => {
   // legitimately split into several partial fills against real venue sizes,
   // so assert the rows, not a single row's qty — the balance above proves the total)
   await openTab('체결 내역');
-  const fillRows = page.locator('.data-table tbody tr').filter({ hasText: 'KRW-BTC' });
+  const fillRows = page.locator('.data-table tbody tr').filter({ hasText: 'BTC-USDC' });
   await expect(fillRows.first()).toContainText('매수');
 });
 
 test('limit order rests in open orders and cancels', async () => {
   const form = page.getByTestId('order-form');
   await form.getByRole('button', { name: '지정가' }).click();
-  await form.getByPlaceholder('가격').fill('50000000'); // far below market — rests
+  await form.getByPlaceholder('가격').fill('30000'); // far below market — rests
   await form.getByPlaceholder('수량').fill('0.001');
   await form.getByRole('button', { name: /매수 BTC/ }).click();
   await expectToast(page, '주문이 접수되었습니다');
 
   await openTab('미체결 주문');
-  const orderRow = page.locator('.data-table tbody tr').filter({ hasText: '50,000,000' });
+  const orderRow = page.locator('.data-table tbody tr').filter({ hasText: '30,000' });
   await expect(orderRow).toHaveCount(1);
   await orderRow.getByRole('button', { name: '취소' }).click();
-  await expect(page.locator('.data-table tbody tr').filter({ hasText: '50,000,000' })).toHaveCount(0);
+  await expect(page.locator('.data-table tbody tr').filter({ hasText: '30,000' })).toHaveCount(0);
 });
 
 test('sells the BTC back (market sell, full round trip)', async () => {

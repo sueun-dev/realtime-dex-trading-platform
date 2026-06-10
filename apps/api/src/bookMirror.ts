@@ -19,7 +19,12 @@ import {
   type EngineEvent,
   type MarketConfig,
 } from '@dex/shared';
-import { HyperliquidWs, UpbitWs } from '@dex/market-data';
+import {
+  HyperliquidWs,
+  UpbitWs,
+  spotMarketIdForUpbitCode,
+  upbitCodeForSpotMarket,
+} from '@dex/market-data';
 import type { Exchange } from '@dex/engine';
 import type { Pipeline } from './pipeline.js';
 import type { Services, Stoppable } from './services.js';
@@ -27,12 +32,12 @@ import type { Services, Stoppable } from './services.js';
 export const MIRROR_USER = 'mm-bot';
 
 const ALWAYS_ON = [
-  'KRW-BTC',
-  'KRW-ETH',
-  'KRW-XRP',
-  'KRW-SOL',
-  'KRW-DOGE',
-  'KRW-ADA',
+  'BTC-USDC',
+  'ETH-USDC',
+  'XRP-USDC',
+  'SOL-USDC',
+  'DOGE-USDC',
+  'ADA-USDC',
   'BTC-PERP',
   'ETH-PERP',
   'SOL-PERP',
@@ -186,15 +191,17 @@ export function startBookMirror(svc: Services): Stoppable {
     [...new Set([...alwaysOn, ...hub.subscribedBooks()])].filter(
       (id) => byId.get(id)?.type === 'spot',
     );
+  // Upbit subscribes by its native USDT codes; we relabel snapshots back
+  const activeSpotCodes = (): string[] => activeSpot().map(upbitCodeForSpotMarket);
   const activePerpCoins = (): string[] =>
     [...new Set([...alwaysOn, ...hub.subscribedBooks()])]
       .map((id) => byId.get(id))
       .filter((m): m is MarketConfig => m !== undefined && m.type === 'perp')
       .map((m) => m.base);
 
-  const upbitOb = new UpbitWs(activeSpot(), { types: ['orderbook'] });
+  const upbitOb = new UpbitWs(activeSpotCodes(), { types: ['orderbook'] });
   upbitOb.on('orderbook', (ob: { marketId: string; bids: BookLevel[]; asks: BookLevel[] }) =>
-    onSnapshot(ob.marketId, ob.bids, ob.asks),
+    onSnapshot(spotMarketIdForUpbitCode(ob.marketId), ob.bids, ob.asks),
   );
   upbitOb.on('wsError', () => {});
   upbitOb.connect();
@@ -211,7 +218,7 @@ export function startBookMirror(svc: Services): Stoppable {
   const refresh = setInterval(() => {
     if (stopped) return;
     const next = new Set<string>([...alwaysOn, ...[...hub.subscribedBooks()].filter((id) => byId.has(id))]);
-    upbitOb.setCodes(activeSpot());
+    upbitOb.setCodes(activeSpotCodes());
     hlWs.setL2Coins(activePerpCoins());
     // a market left the active set → take its mirror down (a frozen book lies)
     for (const id of mirrored) {

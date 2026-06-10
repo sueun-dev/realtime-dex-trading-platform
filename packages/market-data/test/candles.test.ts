@@ -24,13 +24,13 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: 
 }
 
 describe('CandleService routing', () => {
-  it('routes KRW-* to Upbit with (market, interval, limit)', async () => {
+  it('routes *-USDC spot to the Upbit USDT market (market, interval, limit)', async () => {
     const data = mkCandles(5);
     const upbit = { fetchCandles: vi.fn(async () => data) };
     const hl = { candleSnapshot: vi.fn(async () => []) };
     const svc = new CandleService(upbit, hl, { now: () => 1_781_103_000_000 });
-    const out = await svc.get('KRW-BTC', '5m', 5);
-    expect(upbit.fetchCandles).toHaveBeenCalledExactlyOnceWith('KRW-BTC', '5m', 5);
+    const out = await svc.get('BTC-USDC', '5m', 5);
+    expect(upbit.fetchCandles).toHaveBeenCalledExactlyOnceWith('USDT-BTC', '5m', 5);
     expect(hl.candleSnapshot).not.toHaveBeenCalled();
     expect(out).toEqual(data);
   });
@@ -61,7 +61,7 @@ describe('CandleService routing', () => {
       { fetchCandles: vi.fn(async () => []) },
       { candleSnapshot: vi.fn(async () => []) },
     );
-    await expect(svc.get('USDT-PEPE', '1m', 10)).rejects.toThrow(/unsupported market id/);
+    await expect(svc.get('KRW-BTC', '1m', 10)).rejects.toThrow(/unsupported market id/);
   });
 });
 
@@ -72,13 +72,13 @@ describe('CandleService TTL cache', () => {
     const hl = { candleSnapshot: vi.fn(async () => []) };
     const svc = new CandleService(upbit, hl, { now: () => clock });
 
-    await svc.get('KRW-BTC', '1m', 5);
+    await svc.get('BTC-USDC', '1m', 5);
     clock += 4_999;
-    await svc.get('KRW-BTC', '1m', 5);
+    await svc.get('BTC-USDC', '1m', 5);
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(1); // cache hit
 
     clock += 2; // 5_001ms after fetch
-    await svc.get('KRW-BTC', '1m', 5);
+    await svc.get('BTC-USDC', '1m', 5);
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(2); // TTL expired
   });
 
@@ -88,9 +88,9 @@ describe('CandleService TTL cache', () => {
     const hl = { candleSnapshot: vi.fn(async () => mkCandles(5)) };
     const svc = new CandleService(upbit, hl, { now: () => clock });
 
-    await svc.get('KRW-BTC', '1m', 5);
-    await svc.get('KRW-BTC', '5m', 5); // different interval → miss
-    await svc.get('KRW-ETH', '1m', 5); // different market → miss
+    await svc.get('BTC-USDC', '1m', 5);
+    await svc.get('BTC-USDC', '5m', 5); // different interval → miss
+    await svc.get('ETH-USDC', '1m', 5); // different market → miss
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(3);
     await svc.get('BTC-PERP', '1m', 5);
     await svc.get('BTC-PERP', '1m', 5); // hit
@@ -103,12 +103,12 @@ describe('CandleService TTL cache', () => {
     const upbit = { fetchCandles: vi.fn(async () => data) };
     const svc = new CandleService(upbit, { candleSnapshot: vi.fn(async () => []) }, { now: () => clock });
 
-    await svc.get('KRW-BTC', '1m', 10);
-    const small = await svc.get('KRW-BTC', '1m', 3);
+    await svc.get('BTC-USDC', '1m', 10);
+    const small = await svc.get('BTC-USDC', '1m', 3);
     expect(small).toEqual(data.slice(-3));
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(1);
 
-    await svc.get('KRW-BTC', '1m', 20); // larger than cached → must refetch
+    await svc.get('BTC-USDC', '1m', 20); // larger than cached → must refetch
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(2);
   });
 
@@ -121,8 +121,8 @@ describe('CandleService TTL cache', () => {
         .mockResolvedValueOnce(mkCandles(5)),
     };
     const svc = new CandleService(upbit, { candleSnapshot: vi.fn(async () => []) }, { now: () => clock });
-    await expect(svc.get('KRW-BTC', '1m', 5)).rejects.toThrow('HTTP 500');
-    const out = await svc.get('KRW-BTC', '1m', 5);
+    await expect(svc.get('BTC-USDC', '1m', 5)).rejects.toThrow('HTTP 500');
+    const out = await svc.get('BTC-USDC', '1m', 5);
     expect(out).toHaveLength(5);
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(2);
   });
@@ -134,9 +134,9 @@ describe('CandleService concurrent dedupe', () => {
     const upbit = { fetchCandles: vi.fn(() => d.promise) };
     const svc = new CandleService(upbit, { candleSnapshot: vi.fn(async () => []) }, { now: () => 1 });
 
-    const p1 = svc.get('KRW-BTC', '1m', 5);
-    const p2 = svc.get('KRW-BTC', '1m', 5);
-    const p3 = svc.get('KRW-BTC', '1m', 3); // smaller limit piggybacks too
+    const p1 = svc.get('BTC-USDC', '1m', 5);
+    const p2 = svc.get('BTC-USDC', '1m', 5);
+    const p3 = svc.get('BTC-USDC', '1m', 3); // smaller limit piggybacks too
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(1);
 
     const data = mkCandles(5);
@@ -156,8 +156,8 @@ describe('CandleService concurrent dedupe', () => {
     };
     const svc = new CandleService(upbit, { candleSnapshot: vi.fn(async () => []) }, { now: () => 1 });
 
-    const p1 = svc.get('KRW-BTC', '1m', 5);
-    const p2 = svc.get('KRW-BTC', '1m', 50);
+    const p1 = svc.get('BTC-USDC', '1m', 5);
+    const p2 = svc.get('BTC-USDC', '1m', 50);
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(2);
     d1.resolve(mkCandles(5));
     d2.resolve(mkCandles(50));
@@ -176,11 +176,11 @@ describe('CandleService concurrent dedupe', () => {
     };
     const svc = new CandleService(upbit, { candleSnapshot: vi.fn(async () => []) }, { now: () => 1 });
 
-    const pSmall = svc.get('KRW-BTC', '1m', 5);
-    const pLarge = svc.get('KRW-BTC', '1m', 50); // replaces the in-flight entry
+    const pSmall = svc.get('BTC-USDC', '1m', 5);
+    const pLarge = svc.get('BTC-USDC', '1m', 50); // replaces the in-flight entry
     dSmall.resolve(mkCandles(5));
     expect(await pSmall).toHaveLength(5); // must NOT delete the large in-flight entry
-    const pPiggy = svc.get('KRW-BTC', '1m', 40); // should piggyback on the large fetch
+    const pPiggy = svc.get('BTC-USDC', '1m', 40); // should piggyback on the large fetch
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(2); // no third fetch
     dLarge.resolve(mkCandles(50));
     expect(await pLarge).toHaveLength(50);
@@ -198,13 +198,13 @@ describe('CandleService concurrent dedupe', () => {
     };
     const svc = new CandleService(upbit, { candleSnapshot: vi.fn(async () => []) }, { now: () => 1 });
 
-    const pSmall = svc.get('KRW-BTC', '1m', 5);
-    const pLarge = svc.get('KRW-BTC', '1m', 50);
+    const pSmall = svc.get('BTC-USDC', '1m', 5);
+    const pLarge = svc.get('BTC-USDC', '1m', 50);
     dLarge.resolve(mkCandles(50));
     expect(await pLarge).toHaveLength(50); // cache now holds the 50-candle window
     dSmall.resolve(mkCandles(5));
     expect(await pSmall).toHaveLength(5); // late small completion must not shrink the cache
-    const out = await svc.get('KRW-BTC', '1m', 50);
+    const out = await svc.get('BTC-USDC', '1m', 50);
     expect(out).toHaveLength(50);
     expect(upbit.fetchCandles).toHaveBeenCalledTimes(2); // served from cache, no refetch
   });

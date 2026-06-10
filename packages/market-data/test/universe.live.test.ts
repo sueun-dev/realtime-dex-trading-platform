@@ -8,53 +8,46 @@ import { LIVE_TIMEOUT, sleep, withNetRetry } from './live.helpers.js';
 
 describe('Full universe build (live)', () => {
   it(
-    'builds >=80 spot configs from the real Upbit universe with live ticks',
+    'builds >=80 USDC spot configs from the real Upbit USDT universe with live ticks',
     async () => {
       const upbit = new UpbitRest();
       const markets = await withNetRetry(() => upbit.fetchMarkets());
-      const krwIds = markets.filter((m) => m.market.startsWith('KRW-')).map((m) => m.market);
+      const usdtIds = markets
+        .filter((m) => m.market.startsWith('USDT-') && m.market !== 'USDT-USDT')
+        .map((m) => m.market);
       // fetch live tickers in chunks to keep URLs and rate limits comfortable
       const tickers: Ticker[] = [];
-      for (let i = 0; i < krwIds.length; i += 100) {
-        const chunk = krwIds.slice(i, i + 100);
+      for (let i = 0; i < usdtIds.length; i += 100) {
+        const chunk = usdtIds.slice(i, i + 100);
         tickers.push(...(await withNetRetry(() => upbit.fetchTickers(chunk))));
         await sleep(250);
       }
-      expect(tickers.length).toBe(krwIds.length);
+      expect(tickers.length).toBe(usdtIds.length);
 
       const configs = buildSpotMarkets(markets, tickers);
       expect(configs.length).toBeGreaterThanOrEqual(80);
       const ids = new Set(configs.map((c) => c.id));
-      expect(ids.has('KRW-BTC') && ids.has('KRW-ETH') && ids.has('KRW-XRP')).toBe(true);
+      expect(ids.has('BTC-USDC') && ids.has('ETH-USDC') && ids.has('XRP-USDC')).toBe(true);
+      // no fiat — KRW must never appear as a market or quote
       for (const c of configs) {
-        expect(c.id.startsWith('KRW-'), `${c.id}: spot id`).toBe(true);
+        expect(c.id.endsWith('-USDC'), `${c.id}: spot id`).toBe(true);
+        expect(c.id.includes('KRW'), `${c.id}: no KRW`).toBe(false);
         expect(c.type).toBe('spot');
-        expect(c.quote).toBe('KRW');
+        expect(c.quote).toBe('USDC');
         expect(c.tickSize > 0n, `${c.id}: tickSize > 0`).toBe(true);
         expect(c.lotSize > 0n, `${c.id}: lotSize > 0`).toBe(true);
         expect(c.minNotional > 0n).toBe(true);
         expect(c.maxLeverage).toBe(1);
         expect(c.koreanName === null || c.koreanName.length > 0).toBe(true);
       }
-      // BTC trades way above 2M KRW → tick must be 1000 KRW
-      const btc = configs.find((c) => c.id === 'KRW-BTC')!;
-      expect(btc.tickSize).toBe(1000n * 10n ** 8n);
-
-      // Pin the post-2025-07-31 cheap-coin bands against live prices:
-      // 100 <= p < 1,000 KRW → 1 KRW tick; 10 <= p < 100 KRW → 0.1 KRW tick.
-      const tickerById = new Map(tickers.map((t) => [t.marketId, t] as const));
-      const byId = new Map(configs.map((c) => [c.id, c] as const));
-      const inBand = (lo: string, hi: string): Ticker[] =>
-        [...tickerById.values()].filter((t) => t.price >= toUnits(lo) && t.price < toUnits(hi) && byId.has(t.marketId));
-      const band100 = inBand('100', '1000');
-      expect(band100.length, 'Upbit always lists coins trading at 100–1,000 KRW').toBeGreaterThan(0);
-      for (const t of band100) {
-        expect(byId.get(t.marketId)!.tickSize, `${t.marketId}: 100–1,000 KRW band tick`).toBe(toUnits('1'));
-      }
-      const band10 = inBand('10', '100');
-      expect(band10.length, 'Upbit always lists coins trading at 10–100 KRW').toBeGreaterThan(0);
-      for (const t of band10) {
-        expect(byId.get(t.marketId)!.tickSize, `${t.marketId}: 10–100 KRW band tick`).toBe(toUnits('0.1'));
+      // BTC ~ tens of thousands of USDC → 5-sig-fig tick of 1 USDC
+      const btc = configs.find((c) => c.id === 'BTC-USDC')!;
+      expect(btc.tickSize).toBe(toUnits('1'));
+      // every tick is a clean power of ten (5-significant-figure rule)
+      for (const c of configs) {
+        let t = c.tickSize;
+        while (t > 1n && t % 10n === 0n) t /= 10n;
+        expect(t === 1n, `${c.id}: tick ${c.tickSize} is a power of ten`).toBe(true);
       }
     },
     LIVE_TIMEOUT,

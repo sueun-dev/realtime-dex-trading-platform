@@ -13,14 +13,14 @@
  */
 
 export const UPBIT_MARKETS_FIXTURE = [
-  { market: 'BTC-BERA', korean_name: '베라체인', english_name: 'Berachain' },
-  { market: 'BTC-FIL', korean_name: '파일코인', english_name: 'Filecoin' },
-  { market: 'KRW-WAXP', korean_name: '왁스', english_name: 'WAX' },
+  { market: 'BTC-BERA', korean_name: '베라체인', english_name: 'Berachain' }, // BTC-quoted, skipped
+  { market: 'KRW-BTC', korean_name: '비트코인', english_name: 'Bitcoin' }, // KRW (fiat), skipped
+  { market: 'USDT-USDT', korean_name: '테더', english_name: 'Tether' }, // self pair, skipped
   { market: 'USDT-PEPE', korean_name: '페페', english_name: 'Pepe' },
-  { market: 'KRW-CARV', korean_name: '카브', english_name: 'CARV' },
-  { market: 'KRW-BTC', korean_name: '비트코인', english_name: 'Bitcoin' },
-  { market: 'KRW-ETH', korean_name: '이더리움', english_name: 'Ethereum' },
-  { market: 'KRW-XRP', korean_name: '리플', english_name: 'XRP' },
+  { market: 'USDT-WAXP', korean_name: '왁스', english_name: 'WAX' },
+  { market: 'USDT-BTC', korean_name: '비트코인', english_name: 'Bitcoin' },
+  { market: 'USDT-ETH', korean_name: '이더리움', english_name: 'Ethereum' },
+  { market: 'USDT-XRP', korean_name: '리플', english_name: 'XRP' },
 ];
 
 /** Upbit returns minute candles NEWEST-FIRST (descending). */

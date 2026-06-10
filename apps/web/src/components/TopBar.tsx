@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { koMessage } from '../lib/api.js';
 import { useAuthStore } from '../lib/auth.js';
 import { getWs } from '../lib/ws.js';
-import { formatKRW, formatPct, formatPrice, truncateAddress } from '../lib/format.js';
+import { formatAmount, formatPct, formatPrice, truncateAddress } from '../lib/format.js';
 import { useMarketStore } from '../stores/market.js';
 import { toast } from '../stores/toast.js';
 
@@ -75,14 +75,14 @@ export function TopBar() {
           <div className="stat">
             <span className="dim">24h 거래대금</span>
             <span>
-              {formatKRW(ticker.volume24h)} {market.quote}
+              {formatAmount(ticker.volume24h)} {market.quote}
             </span>
           </div>
         </div>
       )}
 
       <span className={`badge ${market?.type === 'perp' ? 'perp' : 'spot'}`}>
-        {market?.type === 'perp' ? 'PERP' : 'KRW'}
+        {market?.type === 'perp' ? 'PERP' : 'USDC'}
       </span>
 
       <button

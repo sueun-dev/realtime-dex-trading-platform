@@ -12,30 +12,30 @@ import { useToastStore } from '../src/stores/toast.js';
 import { useUserStore } from '../src/stores/user.js';
 
 export const SPOT_BTC: Market = {
-  id: 'KRW-BTC',
+  id: 'BTC-USDC',
   type: 'spot',
   base: 'BTC',
-  quote: 'KRW',
+  quote: 'USDC',
   koreanName: '비트코인',
   englishName: 'Bitcoin',
   tickSize: toUnits('1'),
   lotSize: toUnits('0.0001'),
-  minNotional: toUnits('5000'),
+  minNotional: toUnits('1'),
   makerFeeBps: 5,
   takerFeeBps: 10,
   maxLeverage: 1,
 };
 
 export const SPOT_ETH: Market = {
-  id: 'KRW-ETH',
+  id: 'ETH-USDC',
   type: 'spot',
   base: 'ETH',
-  quote: 'KRW',
+  quote: 'USDC',
   koreanName: '이더리움',
   englishName: 'Ethereum',
-  tickSize: toUnits('1'),
+  tickSize: toUnits('0.1'),
   lotSize: toUnits('0.0001'),
-  minNotional: toUnits('5000'),
+  minNotional: toUnits('1'),
   makerFeeBps: 5,
   takerFeeBps: 10,
   maxLeverage: 1,
@@ -86,7 +86,7 @@ export function seedMarkets(markets: Market[], selectedId: string): void {
 }
 
 export function resetStores(): void {
-  seedMarkets([], 'KRW-BTC');
+  seedMarkets([], 'BTC-USDC');
   useBookStore.setState({ marketId: null, bids: [], asks: [], seq: 0, trades: [] });
   useUserStore.setState({
     balances: {},

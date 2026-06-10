@@ -6,7 +6,8 @@
 import { expect, test } from '@playwright/test';
 import { claimFaucet, connectWallet, expectToast, openTab, bestPrices } from './helpers.js';
 
-const TICK = 1000n * 10n ** 8n; // KRW-BTC tick (price > ₩2M)
+const TICK = 1n * 10n ** 8n; // BTC-USDC tick ($1 at tens-of-thousands, 5 sig figs)
+const SCALE = 10n ** 8n;
 
 test('user↔user: A의 지정가 매수를 B의 시장가 매도가 체결한다', async ({ browser }) => {
   const ctxA = await browser.newContext();
@@ -24,12 +25,11 @@ test('user↔user: A의 지정가 매수를 B의 시장가 매도가 체결한�
     // ---- A: limit bid a third of the way into the live spread — far enough
     // above the real best bid that it stays best while B acts, far enough
     // below the real ask that it rests ----
-    const { bid, ask } = await bestPrices(a, 'KRW-BTC');
-    expect(ask - bid >= 3n * TICK).toBe(true); // healthy spread to sit inside
-    const third = ((ask - bid) / 3n / TICK) * TICK;
-    const insideUnits = bid + (third > TICK ? third : TICK);
+    const { bid, ask } = await bestPrices(a, 'BTC-USDC');
+    expect(ask - bid >= 2n * TICK).toBe(true); // room for A to sit strictly best
+    const insideUnits = bid + TICK; // one tick above the venue best bid
     expect(insideUnits < ask).toBe(true);
-    const insidePrice = insideUnits / 10n ** 8n; // integer KRW
+    const insidePrice = insideUnits / SCALE; // integer USDC ($1 tick)
     const formA = a.getByTestId('order-form');
     await formA.getByPlaceholder('가격').fill(insidePrice.toString());
     await formA.getByPlaceholder('수량').fill('0.001');
