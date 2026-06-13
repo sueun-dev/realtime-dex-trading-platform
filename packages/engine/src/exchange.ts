@@ -40,7 +40,6 @@ interface MarketState {
 interface PerpSettleResult {
   fee: bigint;
   realized: bigint;
-  positionTouched: boolean;
   clearingTouched: boolean;
 }
 
@@ -548,7 +547,7 @@ export class Exchange {
     if (toAvail > 0n) this.ledger.credit(user, m.quote, toAvail);
     if (fee > 0n) this.ledger.credit(FEE_ACCOUNT, m.quote, fee);
     if (clearingDelta !== 0n) this.ledger.credit(CLEARING_ACCOUNT, m.quote, clearingDelta);
-    return { fee, realized, positionTouched: true, clearingTouched: clearingDelta !== 0n };
+    return { fee, realized, clearingTouched: clearingDelta !== 0n };
   }
 
   /**
