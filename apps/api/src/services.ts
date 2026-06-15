@@ -25,7 +25,7 @@ export interface Stoppable {
 export interface ServiceOptions {
   /** PGlite data directory; undefined = in-memory (tests) */
   dataDir?: string;
-  /** 'live' loads the real Upbit KRW + Hyperliquid perp universes */
+  /** 'live' loads the real Upbit USDT + Hyperliquid perp universes */
   universe: 'live' | MarketConfig[];
   /** live ticker/mark-price feeds (Upbit WS + Hyperliquid WS) */
   feeds?: boolean;

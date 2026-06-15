@@ -1,6 +1,6 @@
 /**
  * Live real-data feeds:
- *  - Upbit WS tickers for every KRW spot market → PriceCache (→ hub broadcast)
+ *  - Upbit WS tickers for every USDC spot market → PriceCache (→ hub broadcast)
  *  - Hyperliquid WS allMids → perp tickers + engine mark prices (throttled)
  *  - 24h perp stats refreshed from real Hyperliquid 1h candles every 5 minutes
  *  - Upbit REST ticker poll every 30s as a WS-gap fallback

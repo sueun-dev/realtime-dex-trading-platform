@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { toUnits } from '@dex/shared';
 import { OrderBook } from '../src/components/OrderBook.js';
-import { mergeLevels } from '../src/stores/book.js';
 
 const tick = toUnits('1');
 
@@ -58,24 +57,5 @@ describe('OrderBook', () => {
     expect(onPriceClick).toHaveBeenCalledWith(toUnits('100'));
     fireEvent.click(screen.getByTestId('bid-row-0'));
     expect(onPriceClick).toHaveBeenCalledWith(toUnits('99'));
-  });
-});
-
-describe('mergeLevels (orderbook deltas)', () => {
-  it('upserts, removes qty-0 levels and keeps sides sorted', () => {
-    const next = mergeLevels(
-      asks,
-      [
-        { price: toUnits('100'), qty: 0n }, // remove best
-        { price: toUnits('101.5'), qty: toUnits('4') }, // insert
-        { price: toUnits('102'), qty: toUnits('1') }, // update
-      ],
-      false,
-    );
-    expect(next.map((l) => l.price)).toEqual([toUnits('101'), toUnits('101.5'), toUnits('102')]);
-    expect(next[2]!.qty).toBe(toUnits('1'));
-
-    const nextBids = mergeLevels(bids, [{ price: toUnits('99.5'), qty: toUnits('1') }], true);
-    expect(nextBids[0]!.price).toBe(toUnits('99.5'));
   });
 });

@@ -98,27 +98,6 @@ export class BookSide {
     if (lvl.orders.length === 0) this.levels.splice(idx, 1);
   }
 
-  /** Drop a level if it has become empty (after fills consumed its head). */
-  pruneIfEmpty(lvl: Level): void {
-    if (lvl.orders.length === 0) {
-      const idx = this.levels.indexOf(lvl);
-      if (idx >= 0) this.levels.splice(idx, 1);
-    }
-  }
-
-  /** Total remaining qty resting within `bound`, excluding `excludeUser`'s orders. */
-  qtyWithin(bound: bigint, excludeUser?: string): bigint {
-    let total = 0n;
-    for (const lvl of this.levels) {
-      if (!this.inBound(lvl.price, bound)) break;
-      for (const o of lvl.orders) {
-        if (excludeUser !== undefined && o.userId === excludeUser) continue;
-        total += remainingQty(o);
-      }
-    }
-    return total;
-  }
-
   isEmpty(): boolean {
     return this.levels.length === 0;
   }

@@ -48,12 +48,6 @@ export class PositionBook {
     return out.sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0));
   }
 
-  all(): Position[] {
-    const out: Position[] = [];
-    for (const markets of this.byUser.values()) out.push(...markets.values());
-    return out;
-  }
-
   clear(): void {
     this.byUser.clear();
   }

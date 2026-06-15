@@ -3,8 +3,6 @@ import type { Order, Side, Trade } from './types.js';
 export type CancelReason =
   | 'user'
   | 'ioc'
-  | 'fok'
-  | 'postOnly'
   | 'selfTrade'
   | 'liquidation'
   | 'slippage'
@@ -19,8 +17,7 @@ export type BalanceReason =
   | 'fee'
   | 'funding'
   | 'pnl'
-  | 'liquidation'
-  | 'faucet';
+  | 'liquidation';
 
 interface BaseEvent {
   seq: number;
@@ -119,5 +116,3 @@ export type EngineEvent =
   | LiquidationEvent
   | FundingAppliedEvent
   | MarkPriceEvent;
-
-export type EngineEventKind = EngineEvent['kind'];

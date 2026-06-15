@@ -31,7 +31,7 @@ export interface CandleServiceOptions {
 }
 
 /**
- * Routes candle requests: 'KRW-*' → Upbit, '*-PERP' → Hyperliquid.
+ * Routes candle requests: '*-USDC' → Upbit (USDT market), '*-PERP' → Hyperliquid.
  * 5s TTL cache keyed (market, interval) + in-flight promise dedupe.
  */
 export class CandleService {

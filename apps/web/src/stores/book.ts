@@ -16,28 +16,6 @@ export interface TradeRow {
 
 const MAX_TRADES = 60;
 
-/**
- * Merge sorted book levels. qty 0 removes the level. Retained as a pure,
- * exported helper (unit-tested in test/orderbook.test.tsx) — the live feed is
- * snapshots-only, so the store no longer wires a delta-merge path.
- */
-export function mergeLevels(existing: Level[], updates: Level[], descending: boolean): Level[] {
-  const map = new Map<bigint, bigint>();
-  for (const l of existing) map.set(l.price, l.qty);
-  for (const u of updates) {
-    if (u.qty === 0n) map.delete(u.price);
-    else map.set(u.price, u.qty);
-  }
-  const out: Level[] = [];
-  for (const [price, qty] of map) out.push({ price, qty });
-  out.sort((a, b) => {
-    if (a.price === b.price) return 0;
-    const lt = a.price < b.price;
-    return (lt ? -1 : 1) * (descending ? -1 : 1);
-  });
-  return out;
-}
-
 export interface BookState {
   marketId: string | null;
   bids: Level[];

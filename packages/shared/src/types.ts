@@ -5,11 +5,11 @@ export type OrderStatus = 'open' | 'filled' | 'cancelled' | 'rejected';
 export type MarketType = 'spot' | 'perp';
 
 export interface MarketConfig {
-  /** spot: Upbit format e.g. 'KRW-BTC'; perp: 'BTC-PERP' */
+  /** spot: '<BASE>-USDC' (mirrors Upbit 'USDT-<BASE>'); perp: '<BASE>-PERP' */
   id: string;
   type: MarketType;
   base: string;
-  quote: string; // 'KRW' for spot, 'USDC' for perp
+  quote: string; // always 'USDC' — a DEX settles in a stablecoin, no fiat
   koreanName: string | null;
   englishName: string | null;
   /** price increment, 1e8 units */

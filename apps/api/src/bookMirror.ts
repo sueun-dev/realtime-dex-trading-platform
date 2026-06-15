@@ -1,6 +1,6 @@
 /**
  * Real-orderbook mirror: replicates the LIVE source-venue depth (Upbit for
- * KRW spot, Hyperliquid l2Book for perps) into our matching engine as real
+ * USDC spot, Hyperliquid l2Book for perps) into our matching engine as real
  * resting orders of the house account — prices AND sizes are the venue's.
  * User orders interact with this book exactly like on the source market:
  * a user bid inside the real spread rests until the real book crosses it.

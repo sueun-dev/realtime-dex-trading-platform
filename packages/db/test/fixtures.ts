@@ -161,7 +161,7 @@ export function buildStream(): EngineEvent[] {
       asset,
       available,
       locked: 0n,
-      reason: 'faucet',
+      reason: 'deposit',
     });
   }
 
