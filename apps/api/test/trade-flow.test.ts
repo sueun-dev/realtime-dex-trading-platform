@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   TEST_SPOT,
   authed,
+  login,
   loginAndFund,
   makeApp,
   placeOrder,
@@ -39,6 +40,21 @@ afterAll(async () => {
 });
 
 describe('faucet', () => {
+  it('concurrent claims deposit exactly once (atomic CAS, no double-spend)', async () => {
+    const carol = await login(t.app); // unfunded — claims the faucet below
+    // fire 8 faucet claims at once — only one may succeed
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => authed(t.app, carol, 'POST', '/api/account/faucet')),
+    );
+    const ok = results.filter((r) => r.statusCode === 200);
+    const conflict = results.filter((r) => r.statusCode === 409);
+    expect(ok).toHaveLength(1);
+    expect(conflict).toHaveLength(7);
+    // balance reflects exactly one faucet, not eight
+    const acct = (await authed(t.app, carol, 'GET', '/api/account')).json() as Wire;
+    expect(bal(acct, 'USDC').available).toBe('100000');
+  });
+
   it('claims once, then 409 — a single USDC collateral, no fiat', async () => {
     const again = await authed(t.app, alice, 'POST', '/api/account/faucet');
     expect(again.statusCode).toBe(409);

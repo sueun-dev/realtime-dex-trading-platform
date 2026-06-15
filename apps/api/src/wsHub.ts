@@ -53,6 +53,8 @@ export class WsHub implements EventSink {
   readonly #tickers = new Map<string, unknown>();
   #tickerQueue = new Map<string, unknown>();
   readonly #dirtyBooks = new Set<string>();
+  /** markets whose source venue feed is stale/down — book is NOT live data */
+  readonly #staleMarkets = new Set<string>();
   #bookTimer: ReturnType<typeof setTimeout> | null = null;
   #tickerTimer: ReturnType<typeof setTimeout> | null = null;
   #closed = false;
@@ -263,12 +265,38 @@ export class WsHub implements EventSink {
     this.#bookTimer.unref?.();
   }
 
+  /**
+   * Mark a market's source-venue feed stale/live. When stale, the book mirror
+   * has taken the book down, so the served depth is NOT live venue data — the
+   * `stale` flag on orderbook frames lets clients show it as such rather than
+   * presenting a frozen book as live. A transition re-broadcasts immediately.
+   */
+  setFeedStale(marketId: string, stale: boolean): void {
+    const was = this.#staleMarkets.has(marketId);
+    if (was === stale) return;
+    if (stale) this.#staleMarkets.add(marketId);
+    else this.#staleMarkets.delete(marketId);
+    this.#broadcastBook(marketId);
+  }
+
+  isFeedStale(marketId: string): boolean {
+    return this.#staleMarkets.has(marketId);
+  }
+
+  #bookData(marketId: string): Record<string, unknown> {
+    const snap = this.#engine.getOrderbook(marketId, BOOK_DEPTH);
+    return {
+      type: 'snapshot',
+      stale: this.#staleMarkets.has(marketId),
+      ...(jsonSafe(snap) as Record<string, unknown>),
+    };
+  }
+
   #broadcastBook(marketId: string): void {
     const channel = `orderbook:${marketId}`;
     if (![...this.#conns].some((c) => c.channels.has(channel))) return;
-    const snap = this.#engine.getOrderbook(marketId, BOOK_DEPTH);
-    const data = { type: 'snapshot', ...(jsonSafe(snap) as Record<string, unknown>) };
-    this.#broadcast(channel, data, snap.seq);
+    const data = this.#bookData(marketId);
+    this.#broadcast(channel, data, data['seq'] as number);
   }
 
   #sendInitial(conn: Conn, channel: string): void {
@@ -281,9 +309,8 @@ export class WsHub implements EventSink {
     } else if (channel.startsWith('orderbook:')) {
       const marketId = channel.slice('orderbook:'.length);
       if (this.#engine.getMarket(marketId)) {
-        const snap = this.#engine.getOrderbook(marketId, BOOK_DEPTH);
-        const data = { type: 'snapshot', ...(jsonSafe(snap) as Record<string, unknown>) };
-        this.#send(conn, { channel, data, seq: snap.seq });
+        const data = this.#bookData(marketId);
+        this.#send(conn, { channel, data, seq: data['seq'] as number });
       }
     } else if (channel.startsWith('trades:')) {
       const ring = this.#tradeRing.get(channel.slice('trades:'.length));

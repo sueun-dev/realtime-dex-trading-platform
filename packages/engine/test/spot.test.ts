@@ -336,6 +336,22 @@ describe('spot matching', () => {
     expect(rejection(fok)?.code).toBe('INSUFFICIENT_BALANCE');
   });
 
+  it('rejects a duplicate clientOrderId while the first is live, allows reuse after it clears', () => {
+    const { ex } = setup();
+    const first = ex.submitOrder('alice', req(M, 'buy', 'limit', u(40_000_000), u('0.01'), { clientOrderId: 'dup' }), TS++);
+    const id = acceptedId(first);
+    // a second LIVE order with the same clientOrderId is rejected
+    const dup = ex.submitOrder('alice', req(M, 'buy', 'limit', u(40_000_000), u('0.01'), { clientOrderId: 'dup' }), TS++);
+    expect(rejection(dup)?.code).toBe('DUPLICATE_CLIENT_ORDER_ID');
+    // a different user may use the same id
+    const other = ex.submitOrder('bob', req(M, 'buy', 'limit', u(40_000_000), u('0.01'), { clientOrderId: 'dup' }), TS++);
+    expect(other.find((e) => e.kind === 'orderAccepted')).toBeTruthy();
+    // once the first clears, the id frees up for reuse
+    ex.cancelOrder('alice', id, TS++);
+    const reuse = ex.submitOrder('alice', req(M, 'buy', 'limit', u(40_000_000), u('0.01'), { clientOrderId: 'dup' }), TS++);
+    expect(reuse.find((e) => e.kind === 'orderAccepted')).toBeTruthy();
+  });
+
   it('clientOrderId round-trips through accept and reject events', () => {
     const { ex } = setup();
     const ok = ex.submitOrder(

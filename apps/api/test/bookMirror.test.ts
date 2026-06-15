@@ -133,4 +133,24 @@ describe('applyMirrorSnapshot', () => {
       expect(b.locked >= 0n).toBe(true);
     }
   });
+
+  it('exposes feed staleness so a frozen book is never presented as live', async () => {
+    // fresh: REST orderbook reports the venue feed as live
+    const live = (await t.app.inject({ method: 'GET', url: `/api/markets/${M}/orderbook` })).json() as {
+      stale: boolean;
+    };
+    expect(live.stale).toBe(false);
+
+    // venue feed goes silent → the gate flags the market stale
+    t.svc.hub.setFeedStale(M, true);
+    const stale = (await t.app.inject({ method: 'GET', url: `/api/markets/${M}/orderbook` })).json() as {
+      stale: boolean;
+    };
+    expect(stale.stale).toBe(true);
+    expect(t.svc.hub.isFeedStale(M)).toBe(true);
+
+    // feed recovers
+    t.svc.hub.setFeedStale(M, false);
+    expect(t.svc.hub.isFeedStale(M)).toBe(false);
+  });
 });

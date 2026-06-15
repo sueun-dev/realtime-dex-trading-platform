@@ -24,7 +24,10 @@ export function registerMarketRoutes(app: FastifyInstance, svc: Services): void 
   app.get('/api/markets/:id/orderbook', (req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { depth?: string };
-    return jsonSafe(engine.getOrderbook(id, clampInt(q.depth, 20, 1, 50))); // throws MARKET_NOT_FOUND
+    const snap = engine.getOrderbook(id, clampInt(q.depth, 20, 1, 50)); // throws MARKET_NOT_FOUND
+    // `stale` = source venue feed is down, so the mirror took the book down and
+    // this depth is NOT live venue data (clients should not present it as live)
+    return { ...(jsonSafe(snap) as Record<string, unknown>), stale: hub.isFeedStale(id) };
   });
 
   app.get('/api/markets/:id/trades', async (req) => {

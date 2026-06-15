@@ -42,6 +42,18 @@ describe('users repo', () => {
     const row = await repos.users.get(ALICE);
     expect(row?.faucetClaimedAt).toBe(5000);
   });
+
+  it('claimFaucet is an atomic compare-and-set — exactly one of N concurrent claims wins', async () => {
+    const { repos } = await setup();
+    await repos.users.getOrCreate(ALICE, 1000);
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => repos.users.claimFaucet(ALICE, 5000 + i)),
+    );
+    expect(results.filter(Boolean)).toHaveLength(1); // exactly one winner
+    expect((await repos.users.get(ALICE))?.faucetClaimedAt).not.toBeNull();
+    // a later claim never wins again
+    expect(await repos.users.claimFaucet(ALICE, 9999)).toBe(false);
+  });
 });
 
 describe('nonces repo', () => {

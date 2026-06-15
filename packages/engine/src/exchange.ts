@@ -61,6 +61,8 @@ export class Exchange {
   private static readonly TERMINAL_CACHE = 20_000;
   /** ids of RESTING (open, in-book) orders per user */
   private readonly openByUser = new Map<string, Set<string>>();
+  /** userId -> (clientOrderId -> orderId) for LIVE orders, to reject duplicates */
+  private readonly clientIds = new Map<string, Map<string, string>>();
   /** `${userId} ${marketId}` -> leverage */
   private readonly leverages = new Map<string, number>();
   private readonly markPrices = new Map<string, bigint>();
@@ -172,6 +174,11 @@ export class Exchange {
     }
     if (req.type === 'market' && req.postOnly) {
       return reject('INVALID_ORDER', 'market orders cannot be postOnly');
+    }
+
+    // clientOrderId must be unique among the user's LIVE orders (idempotency)
+    if (req.clientOrderId !== undefined && this.clientIds.get(userId)?.has(req.clientOrderId)) {
+      return reject('DUPLICATE_CLIENT_ORDER_ID', `clientOrderId ${req.clientOrderId} already in use`);
     }
     if (req.type === 'market' && req.tif === 'GTC') {
       return reject('INVALID_ORDER', 'market orders must be IOC or FOK');
@@ -300,6 +307,14 @@ export class Exchange {
           this.openByUser.set(userId, set);
         }
         set.add(order.id);
+        if (order.clientOrderId !== null) {
+          let cids = this.clientIds.get(userId);
+          if (!cids) {
+            cids = new Map();
+            this.clientIds.set(userId, cids);
+          }
+          cids.set(order.clientOrderId, order.id);
+        }
       }
     }
     return evts;
@@ -310,6 +325,13 @@ export class Exchange {
   /** Move a now-terminal order out of the live map into the bounded cache. */
   private retire(o: EngineOrder): void {
     this.orders.delete(o.id);
+    if (o.clientOrderId !== null) {
+      const cids = this.clientIds.get(o.userId);
+      if (cids?.get(o.clientOrderId) === o.id) {
+        cids.delete(o.clientOrderId);
+        if (cids.size === 0) this.clientIds.delete(o.userId);
+      }
+    }
     this.terminalOrders.set(o.id, o);
     if (this.terminalOrders.size > Exchange.TERMINAL_CACHE) {
       const oldest = this.terminalOrders.keys().next().value;
@@ -995,6 +1017,7 @@ export class Exchange {
     this.orders.clear();
     this.terminalOrders.clear();
     this.openByUser.clear();
+    this.clientIds.clear();
     this.leverages.clear();
     this.markPrices.clear();
     for (const ms of this.markets.values()) {
@@ -1033,6 +1056,14 @@ export class Exchange {
         this.openByUser.set(eo.userId, set);
       }
       set.add(eo.id);
+      if (eo.clientOrderId !== null) {
+        let cids = this.clientIds.get(eo.userId);
+        if (!cids) {
+          cids = new Map();
+          this.clientIds.set(eo.userId, cids);
+        }
+        cids.set(eo.clientOrderId, eo.id);
+      }
     }
     this.seqCounter = state.lastSeq;
   }

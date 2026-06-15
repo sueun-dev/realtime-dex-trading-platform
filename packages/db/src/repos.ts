@@ -4,7 +4,7 @@
  * mapping (String()/BigInt()), never via JS floats. All queries are built by
  * drizzle and fully parameterized.
  */
-import { and, asc, desc, eq, like, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type {
   Balance,
   Candle,
@@ -150,6 +150,20 @@ export function createRepos(db: Db) {
         .update(s.users)
         .set({ faucetClaimedAt: atMs })
         .where(eq(s.users.id, address.toLowerCase()));
+    },
+
+    /**
+     * Atomically claim the faucet: a single conditional UPDATE that only
+     * succeeds while faucet_claimed_at IS NULL. Returns true iff THIS call won
+     * the claim, so concurrent requests cannot both deposit (no double-spend).
+     */
+    async claimFaucet(address: string, atMs: number): Promise<boolean> {
+      const won = await db
+        .update(s.users)
+        .set({ faucetClaimedAt: atMs })
+        .where(and(eq(s.users.id, address.toLowerCase()), isNull(s.users.faucetClaimedAt)))
+        .returning({ id: s.users.id });
+      return won.length === 1;
     },
   };
 

@@ -48,6 +48,13 @@ const DEPTH = 10;
 /** per-market apply throttle (trailing — latest snapshot always lands) */
 const APPLY_MS = 400;
 const ACTIVE_REFRESH_MS = 2000;
+/**
+ * If no fresh venue snapshot arrives within this window, the feed is treated as
+ * down: the mirror book is taken DOWN (no frozen liquidity presented as live)
+ * and the market is flagged stale to clients. Upbit/HL push every few seconds,
+ * so this only trips on a real outage.
+ */
+const STALE_MS = 8000;
 
 export interface MirrorDeps {
   engine: Exchange;
@@ -156,12 +163,30 @@ export function startBookMirror(svc: Services): Stoppable {
   let stopped = false;
   const pendings = new Map<string, { bids: BookLevel[]; asks: BookLevel[] }>();
   const lastApplied = new Map<string, number>();
+  const lastSnapshotAt = new Map<string, number>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Cancel every house quote on a market (book down) — its book is no longer live. */
+  const takeDown = (marketId: string): Promise<unknown> => {
+    pendings.delete(marketId);
+    return pipeline
+      .exec(() => {
+        const now = Date.now();
+        const evts: EngineEvent[] = [];
+        for (const o of engine.getOpenOrders(MIRROR_USER, marketId)) {
+          evts.push(...engine.cancelOrder(MIRROR_USER, o.id, now));
+        }
+        return evts;
+      })
+      .catch((e: unknown) => log(`mirror takedown ${marketId} failed: ${String(e)}`));
+  };
 
   const onSnapshot = (marketId: string, bids: BookLevel[], asks: BookLevel[]): void => {
     if (stopped) return;
     const market = byId.get(marketId);
     if (!market) return;
+    lastSnapshotAt.set(marketId, Date.now());
+    hub.setFeedStale(marketId, false); // fresh venue data — book is live again
     pendings.set(marketId, { bids, asks });
     const since = Date.now() - (lastApplied.get(marketId) ?? 0);
     if (since >= APPLY_MS) flush(marketId);
@@ -213,27 +238,30 @@ export function startBookMirror(svc: Services): Stoppable {
   hlWs.on('wsError', () => {});
   hlWs.connect();
 
-  // ---- dynamic active set: mirror whatever users are watching -------------
+  // ---- dynamic active set + staleness watchdog ---------------------------
   let mirrored = new Set<string>([...alwaysOn]);
   const refresh = setInterval(() => {
     if (stopped) return;
     const next = new Set<string>([...alwaysOn, ...[...hub.subscribedBooks()].filter((id) => byId.has(id))]);
     upbitOb.setCodes(activeSpotCodes());
     hlWs.setL2Coins(activePerpCoins());
+    const now = Date.now();
     // a market left the active set → take its mirror down (a frozen book lies)
     for (const id of mirrored) {
       if (!next.has(id)) {
-        const market = byId.get(id)!;
-        void pipeline
-          .exec(() => {
-            const now = Date.now();
-            const evts: EngineEvent[] = [];
-            for (const o of engine.getOpenOrders(MIRROR_USER, market.id)) {
-              evts.push(...engine.cancelOrder(MIRROR_USER, o.id, now));
-            }
-            return evts;
-          })
-          .catch((e: unknown) => log(`mirror teardown ${id} failed: ${String(e)}`));
+        void takeDown(id);
+        lastSnapshotAt.delete(id);
+        hub.setFeedStale(id, false); // not stale — just not mirrored anymore
+      }
+    }
+    // active markets whose venue feed went silent → take the book DOWN and flag
+    // stale, so a frozen book is never presented (or traded against) as live
+    for (const id of next) {
+      const last = lastSnapshotAt.get(id);
+      if (last !== undefined && now - last > STALE_MS && !hub.isFeedStale(id)) {
+        log(`mirror ${id}: venue feed stale (>${STALE_MS}ms) — taking book down`);
+        hub.setFeedStale(id, true);
+        void takeDown(id);
       }
     }
     mirrored = next;
