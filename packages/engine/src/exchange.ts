@@ -49,7 +49,16 @@ export class Exchange {
   private readonly markets = new Map<string, MarketState>();
   private readonly ledger = new Ledger(new Set([CLEARING_ACCOUNT]));
   private readonly positions = new PositionBook();
+  /** LIVE (resting/open) orders only — bounded by the live book, not by churn */
   private readonly orders = new Map<string, EngineOrder>();
+  /**
+   * Bounded insertion-ordered cache of recently terminal (filled/cancelled)
+   * orders so `getOrder` still answers right after an order settles. Capped so
+   * the book mirror's high-churn requoting cannot grow memory without bound;
+   * full order history lives in the DB projection, not here.
+   */
+  private readonly terminalOrders = new Map<string, EngineOrder>();
+  private static readonly TERMINAL_CACHE = 20_000;
   /** ids of RESTING (open, in-book) orders per user */
   private readonly openByUser = new Map<string, Set<string>>();
   /** `${userId} ${marketId}` -> leverage */
@@ -260,7 +269,10 @@ export class Exchange {
       leverage,
       resting: false,
     };
-    this.orders.set(order.id, order);
+    // NOTE: `orders` holds only LIVE (resting) orders — it is populated when
+    // the order rests (below) and deleted on terminal transitions, mirroring
+    // `openByUser`. This bounds memory under the book mirror's high-churn
+    // requoting (terminal order history lives in the DB projection, not here).
     evts.push({ kind: 'orderAccepted', seq: s, ts, order: toPublicOrder(order) });
     if (required > 0n) {
       this.ledger.lock(userId, lockAsset!, required);
@@ -281,6 +293,7 @@ export class Exchange {
       } else {
         ms.book.side(order.side).insert(order);
         order.resting = true;
+        this.orders.set(order.id, order); // now live — track it
         let set = this.openByUser.get(userId);
         if (!set) {
           set = new Set();
@@ -293,6 +306,16 @@ export class Exchange {
   }
 
   // ---------------------------------------------------------------- matching
+
+  /** Move a now-terminal order out of the live map into the bounded cache. */
+  private retire(o: EngineOrder): void {
+    this.orders.delete(o.id);
+    this.terminalOrders.set(o.id, o);
+    if (this.terminalOrders.size > Exchange.TERMINAL_CACHE) {
+      const oldest = this.terminalOrders.keys().next().value;
+      if (oldest !== undefined) this.terminalOrders.delete(oldest);
+    }
+  }
 
   private matchOrder(ms: MarketState, taker: EngineOrder, evts: EngineEvent[], ts: number): void {
     const m = ms.config;
@@ -324,9 +347,13 @@ export class Exchange {
         opp.remove(maker);
         maker.resting = false;
         this.openByUser.get(maker.userId)?.delete(maker.id);
+        this.retire(maker); // terminal — move to the bounded cache
       }
     }
-    if (remainingQty(taker) === 0n) taker.status = 'filled';
+    if (remainingQty(taker) === 0n) {
+      taker.status = 'filled';
+      this.retire(taker); // fully-filled taker never rested — cache it for getOrder
+    }
   }
 
   private executeFill(
@@ -707,6 +734,7 @@ export class Exchange {
       o.resting = false;
       this.openByUser.get(o.userId)?.delete(o.id);
     }
+    this.retire(o); // terminal — move to the bounded cache
     const rel = o.lockRemaining;
     evts.push({
       kind: 'orderCancelled',
@@ -893,8 +921,13 @@ export class Exchange {
   }
 
   getOrder(orderId: string): Order | undefined {
-    const o = this.orders.get(orderId);
+    const o = this.orders.get(orderId) ?? this.terminalOrders.get(orderId);
     return o ? toPublicOrder(o) : undefined;
+  }
+
+  /** Memory-bound observability: live (resting) + cached-terminal order counts. */
+  orderMapSizes(): { live: number; terminalCache: number } {
+    return { live: this.orders.size, terminalCache: this.terminalOrders.size };
   }
 
   getBalances(userId: string): Balance[] {
@@ -960,6 +993,7 @@ export class Exchange {
     this.ledger.clear();
     this.positions.clear();
     this.orders.clear();
+    this.terminalOrders.clear();
     this.openByUser.clear();
     this.leverages.clear();
     this.markPrices.clear();

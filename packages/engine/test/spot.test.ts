@@ -354,6 +354,24 @@ describe('spot matching', () => {
     expect(rej && rej.kind === 'orderRejected' && rej.clientOrderId).toBe('cid-2');
   });
 
+  it('evicts terminal orders from the live map (memory stays bounded under churn)', () => {
+    const { ex } = setup();
+    // 200 place→fully-cancel cycles must not grow the live order map
+    for (let i = 0; i < 200; i++) {
+      const evts = ex.submitOrder('alice', req(M, 'buy', 'limit', u(40_000_000), u('0.001')), TS++);
+      ex.cancelOrder('alice', acceptedId(evts), TS++);
+    }
+    const sizes = ex.orderMapSizes();
+    expect(sizes.live).toBe(0); // nothing resting → live map empty
+    expect(sizes.terminalCache).toBeLessThanOrEqual(20_000);
+    // a fully-filled taker is also evicted from live, still answerable via getOrder
+    ex.submitOrder('bob', req(M, 'sell', 'limit', u(50_000_000), u('0.01')), TS++);
+    const fill = ex.submitOrder('alice', req(M, 'buy', 'limit', u(50_000_000), u('0.01')), TS++);
+    const id = acceptedId(fill);
+    expect(ex.orderMapSizes().live).toBe(0); // both fully filled → none resting
+    expect(ex.getOrder(id)?.status).toBe('filled'); // still served from the terminal cache
+  });
+
   it('trade events embed post-fill maker/taker order states', () => {
     const { ex } = setup();
     ex.submitOrder('bob', req(M, 'sell', 'limit', u(50_000_000), u('0.02')), TS++);

@@ -16,6 +16,13 @@ async function main(): Promise<void> {
     feeds: true,
     marketMaker: true,
     funding: true,
+    retention: true,
+    // a projection failure means engine and durable store have diverged — exit
+    // non-zero so the supervisor restarts and boot-restore re-establishes a
+    // consistent engine from the last durable watermark
+    onFatal: () => {
+      setTimeout(() => process.exit(70), 50);
+    },
     // generous enough for an active trader, hostile to scrapers/bots
     rateLimit: { max: 600, windowSec: 60, authMax: 30 },
   });

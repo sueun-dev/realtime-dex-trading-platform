@@ -410,6 +410,58 @@ export function createRepos(db: Db) {
   };
 
   /**
+   * Retention GC for the durable projection. The book mirror continuously
+   * cancels+re-submits house quotes across every active market, so the orders
+   * table (and, more slowly, trades/funding/liquidations) would grow without
+   * bound. Pruning keeps the projection a bounded hot store; loadRestoreState
+   * reads only status='open' orders, so pruning terminal rows never affects
+   * restore correctness. MUST be called serialized through the pipeline.
+   */
+  /** Rolling cap: delete all but the most-recent `keep` rows, ordered by `seq`. */
+  async function trimBySeq(
+    table: typeof s.trades | typeof s.fundingPayments | typeof s.liquidations,
+    keep: number,
+  ): Promise<number> {
+    const cutoff = await db
+      .select({ seq: table.seq })
+      .from(table)
+      .orderBy(desc(table.seq))
+      .limit(1)
+      .offset(keep);
+    const cut = cutoff[0]?.seq;
+    if (cut === undefined) return 0;
+    const del = await db.delete(table).where(lte(table.seq, cut)).returning({ seq: table.seq });
+    return del.length;
+  }
+
+  const retention = {
+    async prune(opts: {
+      /** delete terminal (cancelled/filled) orders with ts older than this */
+      terminalOrdersBeforeTs: number;
+      /** keep only the most recent N trades on the global tape */
+      tradesKeep: number;
+      /** keep only the most recent N funding / liquidation rows */
+      eventsKeep: number;
+    }): Promise<{ orders: number; trades: number; funding: number; liquidations: number }> {
+      const delOrders = await db
+        .delete(s.orders)
+        .where(
+          and(
+            or(eq(s.orders.status, 'cancelled'), eq(s.orders.status, 'filled')),
+            lte(s.orders.ts, opts.terminalOrdersBeforeTs),
+          ),
+        )
+        .returning({ id: s.orders.id });
+      return {
+        orders: delOrders.length,
+        trades: await trimBySeq(s.trades, opts.tradesKeep),
+        funding: await trimBySeq(s.fundingPayments, opts.eventsKeep),
+        liquidations: await trimBySeq(s.liquidations, opts.eventsKeep),
+      };
+    },
+  };
+
+  /**
    * Build the exact `Exchange.restoreState` payload from the projection.
    * Runs in a single REPEATABLE READ (read-only) transaction: every SELECT
    * sees the same database snapshot, so balances/positions/orders/lastSeq
@@ -488,6 +540,7 @@ export function createRepos(db: Db) {
     leverage,
     nonces,
     candles,
+    retention,
     loadRestoreState,
   };
 }

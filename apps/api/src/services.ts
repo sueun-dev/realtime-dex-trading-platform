@@ -16,6 +16,7 @@ import { WsHub } from './wsHub.js';
 import { startFeeds } from './feeds.js';
 import { startBookMirror } from './bookMirror.js';
 import { startFunding } from './funding.js';
+import { startRetention } from './retention.js';
 
 export interface Stoppable {
   stop(): void;
@@ -31,6 +32,10 @@ export interface ServiceOptions {
   /** mirror the REAL source-venue orderbooks into the engine (house liquidity) */
   marketMaker?: boolean;
   funding?: boolean;
+  /** periodic retention GC of the durable projection (bounds DB growth under mirror churn) */
+  retention?: boolean;
+  /** invoked when the pipeline poisons (projection failure); production halts the process */
+  onFatal?: (err: unknown) => void;
   jwtSecret?: string;
   perpTopN?: number;
   /** HTTP rate limiting (per IP); false = disabled (default, for tests) */
@@ -119,7 +124,12 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
 
   const auth = new AuthService(opts.jwtSecret ?? process.env.DEX_JWT_SECRET ?? 'dex-dev-secret');
   const hub = new WsHub(engine, (t) => auth.verifyToken(t));
-  const pipeline = new Pipeline(projector, hub);
+  const pipeline = new Pipeline(projector, hub, {
+    onPoison: (err) => {
+      log(`FATAL: durable projection failed — pipeline halted to avoid engine/DB divergence: ${String(err)}`);
+      opts.onFatal?.(err);
+    },
+  });
   const priceCache = new PriceCache();
   const candles = new CandleService(upbit, hl);
 
@@ -153,6 +163,7 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
   if (opts.feeds) stoppables.push(startFeeds(services));
   if (opts.marketMaker) stoppables.push(startBookMirror(services));
   if (opts.funding) stoppables.push(startFunding(services));
+  if (opts.retention) stoppables.push(startRetention(services));
 
   return services;
 }

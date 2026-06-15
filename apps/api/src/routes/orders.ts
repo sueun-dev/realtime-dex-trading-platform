@@ -6,11 +6,34 @@ import {
   mulDiv,
   parseOrderRequest,
   roundToTick,
+  type EngineEvent,
   type ErrorCode,
+  type Order,
   type OrderRequest,
   type Trade,
 } from '@dex/shared';
 import type { Services } from '../services.js';
+
+/**
+ * Final state of a just-submitted order, derived from its own events. The
+ * engine evicts terminal orders from memory immediately, so getOrder() returns
+ * undefined for an order that fully filled or was cancelled in the same call —
+ * we reconstruct the terminal snapshot from the trade/cancel events instead of
+ * relying on the stale at-acceptance snapshot.
+ */
+function finalOrderState(events: EngineEvent[], accepted: Order): Order {
+  let snap = accepted;
+  let cancelled = false;
+  for (const e of events) {
+    if (e.kind === 'trade') {
+      if (e.takerOrder.id === accepted.id) snap = e.takerOrder;
+      else if (e.makerOrder.id === accepted.id) snap = e.makerOrder;
+    } else if (e.kind === 'orderCancelled' && e.orderId === accepted.id) {
+      cancelled = true;
+    }
+  }
+  return cancelled && snap.status !== 'filled' ? { ...snap, status: 'cancelled' } : snap;
+}
 
 export function registerOrderRoutes(
   app: FastifyInstance,
@@ -39,7 +62,10 @@ export function registerOrderRoutes(
     }
     const accepted = outcome.find((e) => e.kind === 'orderAccepted');
     if (!accepted) throw new DexError('INTERNAL', 'no acceptance event');
-    return jsonSafe(engine.getOrder(accepted.order.id) ?? accepted.order);
+    // engine may have already evicted a fully-filled/cancelled order — prefer
+    // the live order, else reconstruct the terminal state from the events
+    const live = engine.getOrder(accepted.order.id);
+    return jsonSafe(live ?? finalOrderState(outcome, accepted.order));
   });
 
   app.delete('/api/orders/:id', { preHandler: authenticate }, async (req) => {

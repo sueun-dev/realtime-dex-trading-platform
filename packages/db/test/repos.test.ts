@@ -374,3 +374,84 @@ describe('loadRestoreState', () => {
     });
   });
 });
+
+describe('retention.prune (bounds DB growth from book-mirror churn)', () => {
+  it('prunes old terminal orders, keeps open + recent, and restore stays correct', async () => {
+    const { projector, repos } = await setup();
+    let seq = 0;
+    const batch: EngineEvent[] = [];
+    const mk = (id: string, ts: number, status: 'open' | 'cancelled'): void => {
+      const order = mkOrder({ id, userId: ALICE, marketId: SPOT, side: 'buy', price: SCALE, qty: SCALE, seq: ++seq, ts });
+      batch.push({ kind: 'orderAccepted', seq, ts, order });
+      if (status === 'cancelled') {
+        batch.push({
+          kind: 'orderCancelled',
+          seq: ++seq,
+          ts,
+          orderId: id,
+          userId: ALICE,
+          marketId: SPOT,
+          remainingQty: SCALE,
+          reason: 'user',
+        });
+      }
+    };
+    // o-open: resting; o-old: cancelled long ago; o-new: cancelled just now
+    mk('o-open', 1_000, 'open');
+    mk('o-old', 1_000, 'cancelled');
+    mk('o-new', 9_000, 'cancelled');
+    await projector.applyBatch(batch);
+
+    expect((await repos.orders.byId('o-old'))?.status).toBe('cancelled');
+
+    const pruned = await repos.retention.prune({
+      terminalOrdersBeforeTs: 5_000, // o-old (ts 1000) is older; o-new (ts 9000) is not
+      tradesKeep: 1_000_000,
+      eventsKeep: 1_000_000,
+    });
+    expect(pruned.orders).toBe(1); // only o-old
+
+    expect(await repos.orders.byId('o-old')).toBeUndefined(); // pruned
+    expect((await repos.orders.byId('o-open'))?.status).toBe('open'); // kept (not terminal)
+    expect((await repos.orders.byId('o-new'))?.status).toBe('cancelled'); // kept (recent)
+
+    // restore is unaffected — it reads only open orders, which survive pruning
+    const state = await repos.loadRestoreState();
+    expect(state.openOrders.map((o) => o.id)).toEqual(['o-open']);
+  });
+
+  it('caps trades to the most recent N by seq', async () => {
+    const { projector, repos } = await setup();
+    const trade = (seq: number): EngineEvent => {
+      const maker = mkOrder({ id: `m${seq}`, userId: BOB, marketId: SPOT, side: 'sell', price: SCALE, qty: SCALE, filledQty: SCALE, status: 'filled', seq, ts: seq });
+      const taker = mkOrder({ id: `t${seq}`, userId: ALICE, marketId: SPOT, side: 'buy', price: SCALE, qty: SCALE, filledQty: SCALE, status: 'filled', seq, ts: seq });
+      return {
+        kind: 'trade',
+        seq,
+        ts: seq,
+        trade: {
+          id: `tr${seq}`,
+          marketId: SPOT,
+          price: SCALE,
+          qty: SCALE,
+          takerSide: 'buy',
+          makerOrderId: `m${seq}`,
+          takerOrderId: `t${seq}`,
+          makerUserId: BOB,
+          takerUserId: ALICE,
+          makerFee: 0n,
+          takerFee: 0n,
+          seq,
+          ts: seq,
+        },
+        makerOrder: maker,
+        takerOrder: taker,
+      };
+    };
+    await projector.applyBatch([trade(1), trade(2), trade(3), trade(4), trade(5)]);
+    const pruned = await repos.retention.prune({ terminalOrdersBeforeTs: 0, tradesKeep: 2, eventsKeep: 1_000_000 });
+    expect(pruned.trades).toBe(3); // keep most-recent 2 (seq 4,5), drop 1,2,3
+    const recent = await repos.trades.recentForMarket(SPOT, 50);
+    expect(recent.map((t) => t.seq).sort((a, b) => a - b)).toEqual([4, 5]);
+  });
+});
