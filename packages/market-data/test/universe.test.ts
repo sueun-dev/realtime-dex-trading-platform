@@ -1,49 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toUnits, type Ticker } from '@dex/shared';
-import { buildPerpMarkets, buildSpotMarkets, perpTickFromMid, upbitKrwTick } from '../src/universe.js';
+import { buildPerpMarkets, buildSpotMarkets, perpTickFromMid } from '../src/universe.js';
 import { HL_ALLMIDS_FIXTURE, HL_META_FIXTURE, UPBIT_MARKETS_FIXTURE, UPBIT_TICKER_FIXTURE } from './fixtures.js';
-
-describe('upbitKrwTick — official KRW tick table (effective 2025-07-31), every boundary, both sides', () => {
-  // Source: docs.upbit.com/kr/docs/krw-market-info_250731
-  // (changelog krw_tick_unit_change_250731, "호가 단위 (변경)" column).
-  const boundaries: { at: string; tickAtOrAbove: string; tickBelow: string }[] = [
-    { at: '2000000', tickAtOrAbove: '1000', tickBelow: '1000' }, // 1M–2M shares the 1,000 tick
-    { at: '1000000', tickAtOrAbove: '1000', tickBelow: '500' },
-    { at: '500000', tickAtOrAbove: '500', tickBelow: '100' },
-    { at: '100000', tickAtOrAbove: '100', tickBelow: '50' },
-    { at: '50000', tickAtOrAbove: '50', tickBelow: '10' },
-    { at: '10000', tickAtOrAbove: '10', tickBelow: '5' },
-    { at: '5000', tickAtOrAbove: '5', tickBelow: '1' },
-    { at: '1000', tickAtOrAbove: '1', tickBelow: '1' }, // 100–1K shares the 1 tick
-    { at: '100', tickAtOrAbove: '1', tickBelow: '0.1' },
-    { at: '10', tickAtOrAbove: '0.1', tickBelow: '0.01' },
-    { at: '1', tickAtOrAbove: '0.01', tickBelow: '0.001' },
-    { at: '0.1', tickAtOrAbove: '0.001', tickBelow: '0.0001' },
-    { at: '0.01', tickAtOrAbove: '0.0001', tickBelow: '0.00001' },
-    { at: '0.001', tickAtOrAbove: '0.00001', tickBelow: '0.000001' },
-    { at: '0.0001', tickAtOrAbove: '0.000001', tickBelow: '0.0000001' },
-    { at: '0.00001', tickAtOrAbove: '0.0000001', tickBelow: '0.00000001' },
-  ];
-
-  for (const b of boundaries) {
-    it(`price ${b.at}: at boundary → ${b.tickAtOrAbove}, one unit below → ${b.tickBelow}`, () => {
-      const price = toUnits(b.at);
-      expect(upbitKrwTick(price)).toBe(toUnits(b.tickAtOrAbove));
-      expect(upbitKrwTick(price - 1n)).toBe(toUnits(b.tickBelow));
-      expect(upbitKrwTick(price + 1n)).toBe(toUnits(b.tickAtOrAbove));
-    });
-  }
-
-  it('real prices: BTC 93,151,000 → 1000; XRP 1,687 → 1; DOGE-ish 339.5 → 1; WAXP-ish 35.5 → 0.1; dust → 0.00000001', () => {
-    expect(upbitKrwTick(toUnits('93151000'))).toBe(toUnits('1000'));
-    expect(upbitKrwTick(toUnits('1687'))).toBe(toUnits('1'));
-    expect(upbitKrwTick(toUnits('339.5'))).toBe(toUnits('1')); // pre-2025-07-31 table would say 0.1
-    expect(upbitKrwTick(toUnits('35.5'))).toBe(toUnits('0.1')); // pre-2025-07-31 table would say 0.01
-    expect(upbitKrwTick(toUnits('0.0001'))).toBe(toUnits('0.000001'));
-    expect(upbitKrwTick(toUnits('0.000009'))).toBe(1n); // < 0.00001 KRW band
-    expect(upbitKrwTick(0n)).toBe(1n);
-  });
-});
 
 describe('buildSpotMarkets — DEX spot from Upbit USDT books, presented as <BASE>-USDC', () => {
   const tickers: Ticker[] = [

@@ -10,34 +10,6 @@ import {
 import type { HlAsset } from './hyperliquid.js';
 import type { UpbitMarket } from './upbit.js';
 
-/**
- * Official Upbit KRW market tick table, effective 2025-07-31. `price` and
- * result are 1e8 units.
- * https://docs.upbit.com/kr/docs/krw-market-info_250731 (announced in the
- * `krw_tick_unit_change_250731` changelog). Rungs are listed one-per-band to
- * mirror the official table, even where adjacent bands share a tick
- * (>=2M and 1M–2M are both 1,000; 1K–5K and 100–1K are both 1).
- */
-export function upbitKrwTick(price: bigint): bigint {
-  if (price >= toUnits('2000000')) return toUnits('1000');
-  if (price >= toUnits('1000000')) return toUnits('1000');
-  if (price >= toUnits('500000')) return toUnits('500');
-  if (price >= toUnits('100000')) return toUnits('100');
-  if (price >= toUnits('50000')) return toUnits('50');
-  if (price >= toUnits('10000')) return toUnits('10');
-  if (price >= toUnits('5000')) return toUnits('5');
-  if (price >= toUnits('1000')) return toUnits('1');
-  if (price >= toUnits('100')) return toUnits('1');
-  if (price >= toUnits('10')) return toUnits('0.1');
-  if (price >= toUnits('1')) return toUnits('0.01');
-  if (price >= toUnits('0.1')) return toUnits('0.001');
-  if (price >= toUnits('0.01')) return toUnits('0.0001');
-  if (price >= toUnits('0.001')) return toUnits('0.00001');
-  if (price >= toUnits('0.0001')) return toUnits('0.000001');
-  if (price >= toUnits('0.00001')) return toUnits('0.0000001');
-  return toUnits('0.00000001'); // 1n — official "< 0.00001 KRW" band
-}
-
 /** Upbit source code (`USDT-BTC`) for an internal spot market id (`BTC-USDC`). */
 export function upbitCodeForSpotMarket(marketId: string): string {
   const base = marketId.slice(0, marketId.lastIndexOf('-'));

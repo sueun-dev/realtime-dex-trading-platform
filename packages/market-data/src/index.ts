@@ -27,7 +27,6 @@ export {
 export {
   buildSpotMarkets,
   buildPerpMarkets,
-  upbitKrwTick,
   perpTickFromMid,
   upbitCodeForSpotMarket,
   spotMarketIdForUpbitCode,
