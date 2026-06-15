@@ -39,7 +39,7 @@ afterAll(async () => {
   await t.stop();
 });
 
-describe('health & readiness', () => {
+describe('health, readiness & metrics', () => {
   it('health is liveness-only; readiness 503s until feeds/marks are warm', async () => {
     const health = await t.app.inject({ method: 'GET', url: '/api/health' });
     expect(health.statusCode).toBe(200);
@@ -48,6 +48,17 @@ describe('health & readiness', () => {
     const ready = await t.app.inject({ method: 'GET', url: '/api/ready' });
     expect(ready.statusCode).toBe(503);
     expect((ready.json() as { ready: boolean }).ready).toBe(false);
+  });
+
+  it('exposes Prometheus-style metrics from real signals', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/api/metrics' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    const body = res.body;
+    expect(body).toContain('dex_engine_seq ');
+    expect(body).toContain('dex_orders_live ');
+    expect(body).toContain('dex_ws_connections ');
+    expect(body).toMatch(/dex_markets_total \d+/);
   });
 });
 
@@ -170,6 +181,29 @@ describe('spot trade lifecycle (maker/taker, exact USDC fees)', () => {
 
     const again = await authed(t.app, alice, 'DELETE', `/api/orders/${makerOrderId}`);
     expect(again.statusCode).toBe(404);
+  });
+
+  it('order response carries the volume-weighted average fill price', async () => {
+    // two resting asks at different prices, then a market buy sweeps both
+    await placeOrder(t.app, alice, { marketId: M, side: 'sell', type: 'limit', price: '100', qty: '0.01', tif: 'GTC' });
+    await placeOrder(t.app, alice, { marketId: M, side: 'sell', type: 'limit', price: '102', qty: '0.01', tif: 'GTC' });
+    const res = await placeOrder(t.app, bob, {
+      marketId: M, side: 'buy', type: 'market', qty: '0.02', tif: 'IOC',
+    });
+    const order = res.json() as Wire;
+    expect(order['filledQty']).toBe('0.02');
+    // (0.01×100 + 0.01×102) / 0.02 = 101
+    expect(order['avgFillPrice']).toBe('101');
+  });
+
+  it('duplicate clientOrderId retry is idempotent — returns the existing order, not an error', async () => {
+    const body = { marketId: M, side: 'sell' as const, type: 'limit' as const, price: '100', qty: '0.01', tif: 'GTC' as const, clientOrderId: 'idem-1' };
+    const first = await placeOrder(t.app, alice, body);
+    expect(first.statusCode).toBe(200);
+    const firstId = (first.json() as Wire)['id'];
+    const retry = await placeOrder(t.app, alice, body);
+    expect(retry.statusCode).toBe(200); // not 409 — idempotent replay
+    expect((retry.json() as Wire)['id']).toBe(firstId); // the SAME order, no double-submit
   });
 
   it('market buy without a price gets an auto bound and fills', async () => {

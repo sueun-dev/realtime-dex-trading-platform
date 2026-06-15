@@ -2,8 +2,10 @@ import type { FastifyInstance, preHandlerAsyncHookHandler } from 'fastify';
 import {
   DexError,
   ErrorCodes,
+  divUnits,
   jsonSafe,
   mulDiv,
+  mulUnits,
   parseOrderRequest,
   roundToTick,
   type EngineEvent,
@@ -35,6 +37,24 @@ function finalOrderState(events: EngineEvent[], accepted: Order): Order {
   return cancelled && snap.status !== 'filled' ? { ...snap, status: 'cancelled' } : snap;
 }
 
+/**
+ * Volume-weighted average fill price for an order, from its trade events —
+ * what a trader most wants after a market order sweeps multiple price levels.
+ * Returns null when the order had no fills. (Computed at the read layer from
+ * the fill tape, so no extra order state needs to be persisted.)
+ */
+function avgFillPrice(events: EngineEvent[], orderId: string): bigint | null {
+  let notional = 0n;
+  let qty = 0n;
+  for (const e of events) {
+    if (e.kind === 'trade' && (e.trade.takerOrderId === orderId || e.trade.makerOrderId === orderId)) {
+      notional += mulUnits(e.trade.price, e.trade.qty);
+      qty += e.trade.qty;
+    }
+  }
+  return qty > 0n ? divUnits(notional, qty) : null;
+}
+
 export function registerOrderRoutes(
   app: FastifyInstance,
   svc: Services,
@@ -55,6 +75,15 @@ export function registerOrderRoutes(
     });
     const rejected = outcome.find((e) => e.kind === 'orderRejected');
     if (rejected) {
+      // idempotent retry: a duplicate clientOrderId returns the EXISTING live
+      // order (200) instead of an error, so a client that retries after a
+      // network timeout can't accidentally double-submit
+      if (rejected.code === ErrorCodes.DUPLICATE_CLIENT_ORDER_ID && request.clientOrderId !== undefined) {
+        const existing = engine
+          .getOpenOrders(req.userId, request.marketId)
+          .find((o) => o.clientOrderId === request.clientOrderId);
+        if (existing) return jsonSafe(existing);
+      }
       const code = (Object.values(ErrorCodes) as string[]).includes(rejected.code)
         ? (rejected.code as ErrorCode)
         : 'INVALID_ORDER';
@@ -65,7 +94,9 @@ export function registerOrderRoutes(
     // engine may have already evicted a fully-filled/cancelled order — prefer
     // the live order, else reconstruct the terminal state from the events
     const live = engine.getOrder(accepted.order.id);
-    return jsonSafe(live ?? finalOrderState(outcome, accepted.order));
+    const order = live ?? finalOrderState(outcome, accepted.order);
+    const avg = avgFillPrice(outcome, accepted.order.id);
+    return jsonSafe({ ...order, avgFillPrice: avg });
   });
 
   app.delete('/api/orders/:id', { preHandler: authenticate }, async (req) => {

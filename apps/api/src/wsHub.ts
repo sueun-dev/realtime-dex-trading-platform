@@ -24,6 +24,8 @@ interface Conn {
   /** flood protection: token bucket refilled lazily */
   tokens: number;
   lastRefill: number;
+  /** heartbeat liveness: set true on any inbound frame, swept each interval */
+  alive: boolean;
 }
 
 /** per-connection message budget: burst of 300, refilling 50/s */
@@ -36,6 +38,8 @@ const BOOK_DEPTH = 20;
 const BOOK_FLUSH_MS = 80;
 const TICKER_FLUSH_MS = 250;
 const TRADE_RING = 200;
+/** heartbeat: ping each conn every interval; reap any that didn't speak since the last */
+const HEARTBEAT_MS = 30_000;
 const INTERNAL_ACCOUNTS = new Set([FEE_ACCOUNT, CLEARING_ACCOUNT]);
 
 /**
@@ -57,11 +61,29 @@ export class WsHub implements EventSink {
   readonly #staleMarkets = new Set<string>();
   #bookTimer: ReturnType<typeof setTimeout> | null = null;
   #tickerTimer: ReturnType<typeof setTimeout> | null = null;
+  readonly #heartbeatTimer: ReturnType<typeof setInterval>;
   #closed = false;
 
   constructor(engine: Exchange, verifyToken: (token: string) => Promise<string | null>) {
     this.#engine = engine;
     this.#verifyToken = verifyToken;
+    // server heartbeat: reap half-open/dead connections that the OS hasn't yet
+    // torn down (no 'close' event), so they don't leak and burn broadcast CPU.
+    this.#heartbeatTimer = setInterval(() => this.#heartbeat(), HEARTBEAT_MS);
+    this.#heartbeatTimer.unref?.();
+  }
+
+  #heartbeat(): void {
+    for (const conn of [...this.#conns]) {
+      if (!conn.alive) {
+        // silent since the last ping → presumed dead
+        this.#conns.delete(conn);
+        conn.socket.close();
+        continue;
+      }
+      conn.alive = false;
+      this.#send(conn, { channel: 'ping', data: null }); // client echoes → marks alive
+    }
   }
 
   register(socket: HubSocket): void {
@@ -71,9 +93,11 @@ export class WsHub implements EventSink {
       userId: null,
       tokens: MSG_BURST,
       lastRefill: Date.now(),
+      alive: true,
     };
     this.#conns.add(conn);
     socket.on('message', (raw) => {
+      conn.alive = true; // any inbound frame proves liveness
       if (!this.#takeToken(conn)) {
         // flooding client: disconnect rather than burn CPU on its frames
         this.#conns.delete(conn);
@@ -250,6 +274,7 @@ export class WsHub implements EventSink {
     this.#closed = true;
     if (this.#bookTimer !== null) clearTimeout(this.#bookTimer);
     if (this.#tickerTimer !== null) clearTimeout(this.#tickerTimer);
+    clearInterval(this.#heartbeatTimer);
     for (const c of this.#conns) c.socket.close();
     this.#conns.clear();
   }

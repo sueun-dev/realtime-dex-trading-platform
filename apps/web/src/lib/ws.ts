@@ -83,6 +83,11 @@ export class WsClient {
       if (msg === null || typeof msg !== 'object') return;
       const { channel, data, seq } = msg as { channel?: unknown; data?: unknown; seq?: unknown };
       if (typeof channel !== 'string') return;
+      if (channel === 'ping') {
+        // server heartbeat — echo so it knows we're alive (else it reaps us)
+        this.sendRaw({ op: 'ping' });
+        return;
+      }
       const set = this.handlers.get(channel);
       if (set === undefined) return;
       for (const handler of [...set]) {

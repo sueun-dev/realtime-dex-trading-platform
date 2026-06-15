@@ -29,6 +29,22 @@ export function registerMarketRoutes(app: FastifyInstance, svc: Services): void 
   /** House commission revenue (FEE_ACCOUNT) per asset. */
   app.get('/api/stats/fees', () => jsonSafe(engine.getBalances(FEE_ACCOUNT)));
 
+  /** Prometheus-style metrics from already-computed signals (operability). */
+  app.get('/api/metrics', (_req, reply) => {
+    const orders = engine.orderMapSizes();
+    const stale = engine.getMarkets().filter((m) => hub.isFeedStale(m.id)).length;
+    const lines = [
+      '# dex exchange metrics',
+      `dex_engine_seq ${engine.seq}`,
+      `dex_orders_live ${orders.live}`,
+      `dex_orders_terminal_cache ${orders.terminalCache}`,
+      `dex_ws_connections ${hub.connectionCount}`,
+      `dex_markets_total ${engine.getMarkets().length}`,
+      `dex_feed_stale_markets ${stale}`,
+    ];
+    return reply.type('text/plain; version=0.0.4').send(lines.join('\n') + '\n');
+  });
+
   app.get('/api/markets', () => {
     return engine.getMarkets().map((m) => ({
       ...(jsonSafe(m) as Record<string, unknown>),
