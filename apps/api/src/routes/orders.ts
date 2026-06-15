@@ -74,12 +74,28 @@ export function registerOrderRoutes(
     return { ok: true };
   });
 
-  app.get('/api/orders', { preHandler: authenticate }, (req) => {
-    return jsonSafe(engine.getOpenOrders(req.userId));
+  app.get('/api/orders', { preHandler: authenticate }, async (req) => {
+    const q = req.query as { status?: string; before?: string; limit?: string };
+    const status = q.status === 'closed' || q.status === 'all' ? q.status : 'open';
+    // open orders come live from the engine (source of truth); closed/all history
+    // is served from the durable projection with a cursor
+    if (status === 'open' && q.before === undefined) {
+      return jsonSafe(engine.getOpenOrders(req.userId));
+    }
+    const orders = await repos.orders.historyForUser(req.userId, {
+      status,
+      ...(q.before !== undefined ? { beforeSeq: Number(q.before) } : {}),
+      ...(q.limit !== undefined ? { limit: Number(q.limit) } : {}),
+    });
+    return jsonSafe(orders);
   });
 
   app.get('/api/fills', { preHandler: authenticate }, async (req) => {
-    const trades = await repos.orders.fillsForUser(req.userId, 100);
+    const q = req.query as { before?: string; limit?: string };
+    const trades = await repos.orders.fillsForUser(req.userId, {
+      ...(q.before !== undefined ? { beforeSeq: Number(q.before) } : {}),
+      ...(q.limit !== undefined ? { limit: Number(q.limit) } : {}),
+    });
     return jsonSafe(trades.map((t) => toFill(t, req.userId)));
   });
 }

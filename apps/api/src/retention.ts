@@ -7,6 +7,7 @@
  * writes. loadRestoreState reads only status='open' orders, so pruning
  * terminal rows never affects restore correctness.
  */
+import { MIRROR_USER } from './bookMirror.js';
 import type { Services, Stoppable } from './services.js';
 
 const GC_INTERVAL_MS = 30_000;
@@ -23,6 +24,7 @@ export function startRetention(svc: Services): Stoppable {
     if (stopped) return;
     await pipeline.runDb(async () => {
       const pruned = await repos.retention.prune({
+        mirrorUserId: MIRROR_USER,
         terminalOrdersBeforeTs: Date.now() - ORDER_RETENTION_MS,
         tradesKeep: TRADES_KEEP,
         eventsKeep: EVENTS_KEEP,

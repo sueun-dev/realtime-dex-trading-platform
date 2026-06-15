@@ -193,6 +193,45 @@ describe('spot trade lifecycle (maker/taker, exact USDC fees)', () => {
   });
 });
 
+describe('order & fill history (status filter + cursor pagination)', () => {
+  it('?status= is honored: open vs closed vs all, with a beforeSeq cursor', async () => {
+    const app = await makeApp();
+    try {
+      const u = await loginAndFund(app.app);
+      await app.svc.pipeline.exec(() => app.svc.engine.deposit(u.address, 'TBT', 100_000_000n, Date.now()));
+      // place 3 sells, cancel 2 → 2 closed (cancelled) + 1 open
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const r = await placeOrder(app.app, u, {
+          marketId: M, side: 'sell', type: 'limit', price: String(100 + i), qty: '0.01', tif: 'GTC',
+        });
+        ids.push((r.json() as { id: string }).id);
+      }
+      await authed(app.app, u, 'DELETE', `/api/orders/${ids[0]}`);
+      await authed(app.app, u, 'DELETE', `/api/orders/${ids[1]}`);
+
+      const open = (await authed(app.app, u, 'GET', '/api/orders?status=open')).json() as Wire[];
+      expect(open.map((o) => o['id'])).toEqual([ids[2]]); // only the resting one
+
+      const closed = (await authed(app.app, u, 'GET', '/api/orders?status=closed')).json() as Wire[];
+      expect(closed.map((o) => o['id']).sort()).toEqual([ids[0], ids[1]].sort());
+      expect(closed.every((o) => o['status'] === 'cancelled')).toBe(true);
+
+      const all = (await authed(app.app, u, 'GET', '/api/orders?status=all')).json() as Wire[];
+      expect(all).toHaveLength(3);
+
+      // cursor: limit=1 then page with before=<seq of first>
+      const page1 = (await authed(app.app, u, 'GET', '/api/orders?status=all&limit=1')).json() as Wire[];
+      expect(page1).toHaveLength(1);
+      const cursor = page1[0]!['seq'] as number;
+      const page2 = (await authed(app.app, u, 'GET', `/api/orders?status=all&limit=5&before=${cursor}`)).json() as Wire[];
+      expect(page2.every((o) => (o['seq'] as number) < cursor)).toBe(true);
+    } finally {
+      await app.stop();
+    }
+  });
+});
+
 describe('order validation (engine + zod, exact error codes)', () => {
   const cases: { name: string; body: Record<string, unknown>; status: number; code: string }[] = [
     {

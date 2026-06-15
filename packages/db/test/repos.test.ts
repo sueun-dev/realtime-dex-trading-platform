@@ -243,9 +243,9 @@ describe('orders + trades repos', () => {
     const { projector, repos } = await setup();
     await seedOrdersAndTrades(projector);
 
-    const aliceFills = await repos.orders.fillsForUser(ALICE, 10);
+    const aliceFills = await repos.orders.fillsForUser(ALICE, { limit: 10 });
     expect(aliceFills.map((t) => t.id)).toEqual(['t102', 't101', 't100']); // maker x2 + taker x1
-    const limited = await repos.orders.fillsForUser(ALICE, 2);
+    const limited = await repos.orders.fillsForUser(ALICE, { limit: 2 });
     expect(limited.map((t) => t.id)).toEqual(['t102', 't101']);
     expect(limited[0]?.makerFee).toBe(5n);
   });
@@ -388,48 +388,44 @@ describe('loadRestoreState', () => {
 });
 
 describe('retention.prune (bounds DB growth from book-mirror churn)', () => {
-  it('prunes old terminal orders, keeps open + recent, and restore stays correct', async () => {
+  const MIRROR = 'mm-bot';
+
+  it('prunes only the MIRROR’s old terminal orders; keeps user history + open + restore', async () => {
     const { projector, repos } = await setup();
     let seq = 0;
     const batch: EngineEvent[] = [];
-    const mk = (id: string, ts: number, status: 'open' | 'cancelled'): void => {
-      const order = mkOrder({ id, userId: ALICE, marketId: SPOT, side: 'buy', price: SCALE, qty: SCALE, seq: ++seq, ts });
+    const mk = (id: string, userId: string, ts: number, status: 'open' | 'cancelled'): void => {
+      const order = mkOrder({ id, userId, marketId: SPOT, side: 'buy', price: SCALE, qty: SCALE, seq: ++seq, ts });
       batch.push({ kind: 'orderAccepted', seq, ts, order });
       if (status === 'cancelled') {
-        batch.push({
-          kind: 'orderCancelled',
-          seq: ++seq,
-          ts,
-          orderId: id,
-          userId: ALICE,
-          marketId: SPOT,
-          remainingQty: SCALE,
-          reason: 'user',
-        });
+        batch.push({ kind: 'orderCancelled', seq: ++seq, ts, orderId: id, userId, marketId: SPOT, remainingQty: SCALE, reason: 'user' });
       }
     };
-    // o-open: resting; o-old: cancelled long ago; o-new: cancelled just now
-    mk('o-open', 1_000, 'open');
-    mk('o-old', 1_000, 'cancelled');
-    mk('o-new', 9_000, 'cancelled');
+    mk('mm-old', MIRROR, 1_000, 'cancelled'); // mirror churn, old → pruned
+    mk('mm-new', MIRROR, 9_000, 'cancelled'); // mirror churn, recent → kept
+    mk('user-old', ALICE, 1_000, 'cancelled'); // a USER's closed order, old → KEPT (history)
+    mk('user-open', ALICE, 1_000, 'open'); // user resting → kept
     await projector.applyBatch(batch);
 
-    expect((await repos.orders.byId('o-old'))?.status).toBe('cancelled');
-
     const pruned = await repos.retention.prune({
-      terminalOrdersBeforeTs: 5_000, // o-old (ts 1000) is older; o-new (ts 9000) is not
+      mirrorUserId: MIRROR,
+      terminalOrdersBeforeTs: 5_000, // ts 1000 is older; ts 9000 is not
       tradesKeep: 1_000_000,
       eventsKeep: 1_000_000,
     });
-    expect(pruned.orders).toBe(1); // only o-old
+    expect(pruned.orders).toBe(1); // only mm-old
 
-    expect(await repos.orders.byId('o-old')).toBeUndefined(); // pruned
-    expect((await repos.orders.byId('o-open'))?.status).toBe('open'); // kept (not terminal)
-    expect((await repos.orders.byId('o-new'))?.status).toBe('cancelled'); // kept (recent)
+    expect(await repos.orders.byId('mm-old')).toBeUndefined(); // mirror churn pruned
+    expect((await repos.orders.byId('mm-new'))?.status).toBe('cancelled'); // recent mirror kept
+    expect((await repos.orders.byId('user-old'))?.status).toBe('cancelled'); // USER history kept
+    expect((await repos.orders.byId('user-open'))?.status).toBe('open');
 
-    // restore is unaffected — it reads only open orders, which survive pruning
+    // restore reads only open orders → unaffected
     const state = await repos.loadRestoreState();
-    expect(state.openOrders.map((o) => o.id)).toEqual(['o-open']);
+    expect(state.openOrders.map((o) => o.id)).toEqual(['user-open']);
+    // user order history survives pruning + is paginable
+    const hist = await repos.orders.historyForUser(ALICE, { status: 'closed' });
+    expect(hist.map((o) => o.id)).toEqual(['user-old']);
   });
 
   it('caps trades to the most recent N by seq', async () => {
@@ -461,7 +457,7 @@ describe('retention.prune (bounds DB growth from book-mirror churn)', () => {
       };
     };
     await projector.applyBatch([trade(1), trade(2), trade(3), trade(4), trade(5)]);
-    const pruned = await repos.retention.prune({ terminalOrdersBeforeTs: 0, tradesKeep: 2, eventsKeep: 1_000_000 });
+    const pruned = await repos.retention.prune({ mirrorUserId: MIRROR, terminalOrdersBeforeTs: 0, tradesKeep: 2, eventsKeep: 1_000_000 });
     expect(pruned.trades).toBe(3); // keep most-recent 2 (seq 4,5), drop 1,2,3
     const recent = await repos.trades.recentForMarket(SPOT, 50);
     expect(recent.map((t) => t.seq).sort((a, b) => a - b)).toEqual([4, 5]);

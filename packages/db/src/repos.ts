@@ -4,7 +4,7 @@
  * mapping (String()/BigInt()), never via JS floats. All queries are built by
  * drizzle and fully parameterized.
  */
-import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type {
   Balance,
   Candle,
@@ -241,12 +241,40 @@ export function createRepos(db: Db) {
       return rows.map(toOrder);
     },
 
-    /** The user's fills (as maker or taker), most recent first. */
-    async fillsForUser(userId: string, limit = 100): Promise<Trade[]> {
+    /**
+     * Order history for a user, newest-first, with an optional status filter
+     * and a `beforeSeq` cursor for pagination. `status`: 'open' (resting),
+     * 'closed' (filled/cancelled/rejected), or 'all'.
+     */
+    async historyForUser(
+      userId: string,
+      opts: { status?: 'open' | 'closed' | 'all'; beforeSeq?: number; limit?: number } = {},
+    ): Promise<Order[]> {
+      const status = opts.status ?? 'all';
+      const limit = Math.max(1, Math.min(200, opts.limit ?? 50));
+      const conds = [eq(s.orders.userId, userId)];
+      if (status === 'open') conds.push(eq(s.orders.status, 'open'));
+      else if (status === 'closed')
+        conds.push(or(eq(s.orders.status, 'filled'), eq(s.orders.status, 'cancelled'), eq(s.orders.status, 'rejected'))!);
+      if (opts.beforeSeq !== undefined) conds.push(lt(s.orders.seq, opts.beforeSeq));
+      const rows = await db
+        .select()
+        .from(s.orders)
+        .where(and(...conds))
+        .orderBy(desc(s.orders.seq))
+        .limit(limit);
+      return rows.map(toOrder);
+    },
+
+    /** The user's fills (as maker or taker), newest-first, with optional cursor. */
+    async fillsForUser(userId: string, opts: { beforeSeq?: number; limit?: number } = {}): Promise<Trade[]> {
+      const limit = Math.max(1, Math.min(200, opts.limit ?? 100));
+      const conds = [or(eq(s.trades.makerUserId, userId), eq(s.trades.takerUserId, userId))!];
+      if (opts.beforeSeq !== undefined) conds.push(lt(s.trades.seq, opts.beforeSeq));
       const rows = await db
         .select()
         .from(s.trades)
-        .where(or(eq(s.trades.makerUserId, userId), eq(s.trades.takerUserId, userId)))
+        .where(and(...conds))
         .orderBy(desc(s.trades.seq))
         .limit(limit);
       return rows.map(toTrade);
@@ -433,17 +461,23 @@ export function createRepos(db: Db) {
 
   const retention = {
     async prune(opts: {
-      /** delete terminal (cancelled/filled) orders with ts older than this */
+      /** the house liquidity account whose high-churn terminal orders to prune */
+      mirrorUserId: string;
+      /** delete the mirror's terminal (cancelled/filled) orders with ts older than this */
       terminalOrdersBeforeTs: number;
       /** keep only the most recent N trades on the global tape */
       tradesKeep: number;
       /** keep only the most recent N funding / liquidation rows */
       eventsKeep: number;
     }): Promise<{ orders: number; trades: number; funding: number; liquidations: number }> {
+      // Only the book MIRROR's terminal orders are pruned (it requotes ~thousands/min
+      // and is the sole source of unbounded growth). Real users' terminal orders are
+      // kept so order history stays available — users place comparatively nothing.
       const delOrders = await db
         .delete(s.orders)
         .where(
           and(
+            eq(s.orders.userId, opts.mirrorUserId),
             or(eq(s.orders.status, 'cancelled'), eq(s.orders.status, 'filled')),
             lte(s.orders.ts, opts.terminalOrdersBeforeTs),
           ),
