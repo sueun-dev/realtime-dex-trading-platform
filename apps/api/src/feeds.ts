@@ -14,7 +14,7 @@ import {
   type HlTrade,
   type PublicTrade,
 } from '@dex/market-data';
-import { divUnits, maxBig, minBig, type Ticker } from '@dex/shared';
+import { divUnits, maxBig, minBig, type MarketConfig, type Ticker } from '@dex/shared';
 import { fetchTickersChunked, type Services, type Stoppable } from './services.js';
 
 const MARK_THROTTLE_MS = 1000;
@@ -80,51 +80,65 @@ export function startFeeds(svc: Services): Stoppable {
     for (const [coin, mid] of mids) {
       const m = perpByCoin.get(coin);
       if (!m || mid <= 0n) continue;
-      const st = stats.get(m.id);
-      priceCache.setTicker({
-        marketId: m.id,
-        price: mid,
-        change24h: st && st.prevClose > 0n ? divUnits(mid - st.prevClose, st.prevClose) : 0n,
-        high24h: st ? maxBig(st.high, mid) : mid,
-        low24h: st ? minBig(st.low, mid) : mid,
-        volume24h: st?.volume ?? 0n,
-        ts: now,
-      });
-      const last = lastMark.get(m.id);
-      if (!last || (now - last.at >= MARK_THROTTLE_MS && mid !== last.price)) {
-        lastMark.set(m.id, { price: mid, at: now });
-        void pipeline
-          .exec(() => engine.setMarkPrice(m.id, mid, Date.now()))
-          .catch((e: unknown) => log(`mark price ${m.id} failed: ${String(e)}`));
-      }
+      applyPerpMid(m, mid, now);
     }
   });
   hlWs.connect();
 
+  /** Push a real HL mid into the ticker (only with real 24h stats) + the mark. */
+  function applyPerpMid(m: MarketConfig, mid: bigint, now: number): void {
+    const st = stats.get(m.id);
+    // Do NOT publish fabricated 24h stats (0 / mid placeholders) before the
+    // first real candle refresh — emit the ticker only once real stats exist.
+    if (st !== undefined) {
+      priceCache.setTicker({
+        marketId: m.id,
+        price: mid,
+        change24h: st.prevClose > 0n ? divUnits(mid - st.prevClose, st.prevClose) : 0n,
+        high24h: maxBig(st.high, mid),
+        low24h: minBig(st.low, mid),
+        volume24h: st.volume,
+        ts: now,
+      });
+    }
+    const last = lastMark.get(m.id);
+    if (!last || (now - last.at >= MARK_THROTTLE_MS && mid !== last.price)) {
+      lastMark.set(m.id, { price: mid, at: now });
+      void pipeline
+        .exec(() => engine.setMarkPrice(m.id, mid, Date.now()))
+        .catch((e: unknown) => log(`mark price ${m.id} failed: ${String(e)}`));
+    }
+  }
+
   // ---- 24h perp stats from real 1h candles -----------------------------------
   let statsTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
-  const refreshStats = async (): Promise<void> => {
-    for (const m of perps) {
-      if (stopped) return;
-      try {
-        const end = Date.now();
-        const candles = await svc.hl.candleSnapshot(m.base, '1h', end - 25 * INTERVAL_MS['1h'], end);
-        if (candles.length === 0) continue;
-        const window = candles.slice(-25);
-        const first = window[0]!;
-        let high = first.h;
-        let low = first.l;
-        let volume = 0n;
-        for (const c of window) {
-          high = maxBig(high, c.h);
-          low = minBig(low, c.l);
-          volume += c.v;
-        }
-        stats.set(m.id, { prevClose: first.c, high, low, volume });
-      } catch (e) {
-        log(`perp stats ${m.id} failed: ${String(e)}`);
+  const refreshOne = async (m: MarketConfig): Promise<void> => {
+    try {
+      const end = Date.now();
+      const candles = await svc.hl.candleSnapshot(m.base, '1h', end - 25 * INTERVAL_MS['1h'], end);
+      if (candles.length === 0) return;
+      const window = candles.slice(-25);
+      const first = window[0]!;
+      let high = first.h;
+      let low = first.l;
+      let volume = 0n;
+      for (const c of window) {
+        high = maxBig(high, c.h);
+        low = minBig(low, c.l);
+        volume += c.v;
       }
+      stats.set(m.id, { prevClose: first.c, high, low, volume });
+    } catch (e) {
+      log(`perp stats ${m.id} failed: ${String(e)}`);
+    }
+  };
+  // chunked-parallel so real 24h stats are ready within ~1s of boot (perp
+  // tickers stay suppressed until then rather than showing placeholders)
+  const refreshStats = async (): Promise<void> => {
+    const CHUNK = 8;
+    for (let i = 0; i < perps.length && !stopped; i += CHUNK) {
+      await Promise.all(perps.slice(i, i + CHUNK).map(refreshOne));
     }
   };
   const scheduleStats = (): void => {
@@ -147,6 +161,22 @@ export function startFeeds(svc: Services): Stoppable {
   }, SPOT_POLL_MS);
   pollTimer.unref?.();
 
+  // ---- perp REST fallback poll: keeps marks/tickers fresh if the HL WS drops
+  // (otherwise a frozen perp mark would be served as live indefinitely) -------
+  const perpPollTimer = setInterval(() => {
+    void svc.hl
+      .allMids()
+      .then((mids) => {
+        const now = Date.now();
+        for (const [coin, mid] of mids) {
+          const m = perpByCoin.get(coin);
+          if (m && mid > 0n) applyPerpMid(m, mid, now);
+        }
+      })
+      .catch((e: unknown) => log(`perp mids poll failed: ${String(e)}`));
+  }, SPOT_POLL_MS);
+  perpPollTimer.unref?.();
+
   return {
     stop() {
       stopped = true;
@@ -154,6 +184,7 @@ export function startFeeds(svc: Services): Stoppable {
       hlWs.close();
       if (statsTimer !== null) clearTimeout(statsTimer);
       clearInterval(pollTimer);
+      clearInterval(perpPollTimer);
     },
   };
 }

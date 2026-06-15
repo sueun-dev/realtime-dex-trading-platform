@@ -40,6 +40,8 @@ export interface ServiceOptions {
   perpTopN?: number;
   /** HTTP rate limiting (per IP); false = disabled (default, for tests) */
   rateLimit?: RateLimitConfig | false;
+  /** Fastify trustProxy (CIDR/hop-count/boolean) so req.ip is the real client behind a proxy */
+  trustProxy?: boolean | string | string[] | number;
   log?: (msg: string) => void;
 }
 
@@ -64,6 +66,7 @@ export interface Services {
   upbit: UpbitRest;
   hl: HyperliquidRest;
   rateLimit: RateLimitConfig | false;
+  trustProxy: boolean | string | string[] | number;
   log: (msg: string) => void;
   stop(): Promise<void>;
 }
@@ -151,6 +154,7 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
     upbit,
     hl,
     rateLimit: opts.rateLimit ?? false,
+    trustProxy: opts.trustProxy ?? false,
     log,
     async stop() {
       for (const s of stoppables) s.stop();

@@ -4,6 +4,8 @@ import { verifyMessage } from 'viem';
 
 const NONCE_TTL_MS = 5 * 60_000;
 const TOKEN_TTL = '24h';
+/** hard cap on outstanding nonces — bounds memory against distinct-address spray */
+const MAX_NONCES = 50_000;
 
 /**
  * Wallet-signature auth: the client signs the issued nonce string (EIP-191
@@ -23,7 +25,26 @@ export class AuthService {
   issueNonce(address: string): string {
     const nonce = `dex-login:${randomUUID()}`;
     this.#nonces.set(address.toLowerCase(), { nonce, exp: this.#now() + NONCE_TTL_MS });
+    if (this.#nonces.size > MAX_NONCES) this.#prune();
     return nonce;
+  }
+
+  /**
+   * Bound the nonce map: drop expired entries, then (if still over cap) evict
+   * oldest-inserted. /api/auth/nonce only validates address FORMAT (not
+   * ownership), so an unauthenticated attacker could otherwise spray nonces for
+   * unlimited distinct addresses and grow this map without bound.
+   */
+  #prune(): void {
+    const now = this.#now();
+    for (const [addr, { exp }] of this.#nonces) {
+      if (exp < now) this.#nonces.delete(addr);
+    }
+    while (this.#nonces.size > MAX_NONCES) {
+      const oldest = this.#nonces.keys().next().value;
+      if (oldest === undefined) break;
+      this.#nonces.delete(oldest);
+    }
   }
 
   /** Verifies the signature over the issued nonce; consumes the nonce. */

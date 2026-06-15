@@ -35,7 +35,7 @@ const MAX_CHANNELS = 100;
 const BOOK_DEPTH = 20;
 const BOOK_FLUSH_MS = 80;
 const TICKER_FLUSH_MS = 250;
-const TRADE_RING = 60;
+const TRADE_RING = 200;
 const INTERNAL_ACCOUNTS = new Set([FEE_ACCOUNT, CLEARING_ACCOUNT]);
 
 /**

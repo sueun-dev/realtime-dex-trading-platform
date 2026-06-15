@@ -240,6 +240,9 @@ export function startBookMirror(svc: Services): Stoppable {
 
   // ---- dynamic active set + staleness watchdog ---------------------------
   let mirrored = new Set<string>([...alwaysOn]);
+  // seed the always-on clocks so a major whose feed never connects is flagged
+  const bootAt = Date.now();
+  for (const id of alwaysOn) lastSnapshotAt.set(id, bootAt);
   const refresh = setInterval(() => {
     if (stopped) return;
     const next = new Set<string>([...alwaysOn, ...[...hub.subscribedBooks()].filter((id) => byId.has(id))]);
@@ -253,6 +256,11 @@ export function startBookMirror(svc: Services): Stoppable {
         lastSnapshotAt.delete(id);
         hub.setFeedStale(id, false); // not stale — just not mirrored anymore
       }
+    }
+    // newly-active markets: seed a clock so a feed that NEVER delivers a first
+    // snapshot is also flagged stale (rather than serving an empty book as live)
+    for (const id of next) {
+      if (!mirrored.has(id) && !lastSnapshotAt.has(id)) lastSnapshotAt.set(id, now);
     }
     // active markets whose venue feed went silent → take the book DOWN and flag
     // stale, so a frozen book is never presented (or traded against) as live

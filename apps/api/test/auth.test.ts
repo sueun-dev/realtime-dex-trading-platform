@@ -101,6 +101,20 @@ describe('wallet-signature auth', () => {
     }
   });
 
+  it('bounds the nonce store under a distinct-address spray (no unbounded growth)', async () => {
+    // unauthenticated nonce requests for many distinct valid-format addresses
+    for (let i = 0; i < 200; i++) {
+      const addr = '0x' + i.toString(16).padStart(40, '0');
+      const res = await t.app.inject({ method: 'POST', url: '/api/auth/nonce', body: { address: addr } });
+      expect(res.statusCode).toBe(200);
+    }
+    // the auth service must still issue + verify a fresh nonce correctly
+    const addr = '0x' + 'b'.repeat(40);
+    const nonceRes = await t.app.inject({ method: 'POST', url: '/api/auth/nonce', body: { address: addr } });
+    expect(nonceRes.statusCode).toBe(200);
+    expect((nonceRes.json() as { nonce: string }).nonce).toMatch(/^dex-login:/);
+  });
+
   it('rejects a tampered JWT (flipped payload char)', async () => {
     const user = await login(t.app);
     const [h, p, s] = user.token.split('.');

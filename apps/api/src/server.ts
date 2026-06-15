@@ -32,7 +32,11 @@ function errorBody(code: string, message: string): { error: { code: string; mess
 
 export async function buildApp(svc: Services): Promise<FastifyInstance> {
   const { auth, hub } = svc;
-  const app = fastify({ logger: false });
+  // trustProxy makes req.ip resolve from X-Forwarded-For so per-IP rate limits
+  // scope to the real client behind a reverse proxy/LB (otherwise every client
+  // collapses to the proxy's IP → one shared bucket → global self-DoS). Set it
+  // to the trusted proxy CIDR/hop-count in production; default off (direct).
+  const app = fastify({ logger: false, trustProxy: svc.trustProxy ?? false });
   await app.register(cors, { origin: true });
   await app.register(websocket);
 
@@ -41,6 +45,7 @@ export async function buildApp(svc: Services): Promise<FastifyInstance> {
       global: true,
       max: svc.rateLimit.max,
       timeWindow: svc.rateLimit.windowSec * 1000,
+      keyGenerator: (req) => req.ip, // honors trustProxy → real client IP
       errorResponseBuilder: (_req, ctx) => ({
         statusCode: 429,
         ...errorBody(ErrorCodes.RATE_LIMITED, `rate limit exceeded, retry in ${ctx.after}`),

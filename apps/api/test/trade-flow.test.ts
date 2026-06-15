@@ -39,6 +39,18 @@ afterAll(async () => {
   await t.stop();
 });
 
+describe('health & readiness', () => {
+  it('health is liveness-only; readiness 503s until feeds/marks are warm', async () => {
+    const health = await t.app.inject({ method: 'GET', url: '/api/health' });
+    expect(health.statusCode).toBe(200);
+    expect((health.json() as { ok: boolean }).ok).toBe(true);
+    // this synthetic app has no live feeds → not ready to take traffic
+    const ready = await t.app.inject({ method: 'GET', url: '/api/ready' });
+    expect(ready.statusCode).toBe(503);
+    expect((ready.json() as { ready: boolean }).ready).toBe(false);
+  });
+});
+
 describe('faucet', () => {
   it('concurrent claims deposit exactly once (atomic CAS, no double-spend)', async () => {
     const carol = await login(t.app); // unfunded — claims the faucet below
