@@ -336,6 +336,36 @@ describe('spot matching', () => {
     expect(rejection(fok)?.code).toBe('INSUFFICIENT_BALANCE');
   });
 
+  it('terminal cache evicts oldest past the 20k cap; resting orders are never evicted', () => {
+    const { ex } = setup();
+    // a long-lived resting order must survive any amount of terminal churn
+    const restEvts = ex.submitOrder('alice', req(M, 'buy', 'limit', u(30_000_000), u('0.001')), TS++);
+    const restingId = acceptedId(restEvts);
+    let firstTerminalId = '';
+    for (let i = 0; i < 20_050; i++) {
+      const e = ex.submitOrder('bob', req(M, 'buy', 'limit', u(31_000_000), u('0.001')), TS++);
+      const id = acceptedId(e);
+      if (i === 0) firstTerminalId = id;
+      ex.cancelOrder('bob', id, TS++);
+    }
+    const sizes = ex.orderMapSizes();
+    expect(sizes.live).toBe(1); // only alice's resting order
+    expect(sizes.terminalCache).toBe(20_000); // capped, not 20,050
+    expect(ex.getOrder(firstTerminalId)).toBeUndefined(); // oldest evicted
+    expect(ex.getOrder(restingId)?.status).toBe('open'); // resting order survives + queryable
+  });
+
+  it('frees a clientOrderId when the resting order is fully consumed by a taker', () => {
+    const { ex } = setup();
+    // alice rests a sell with a clientOrderId, bob takes it fully (maker-fill terminal path)
+    ex.submitOrder('alice', req(M, 'sell', 'limit', u(50_000_000), u('0.01'), { clientOrderId: 'mk' }), TS++);
+    ex.submitOrder('bob', req(M, 'buy', 'limit', u(50_000_000), u('0.01')), TS++);
+    // the consumed maker's clientOrderId is freed → alice may reuse it
+    const reuse = ex.submitOrder('alice', req(M, 'sell', 'limit', u(50_000_000), u('0.01'), { clientOrderId: 'mk' }), TS++);
+    expect(reuse.find((e) => e.kind === 'orderAccepted')).toBeTruthy();
+    expect(rejection(reuse)).toBeUndefined();
+  });
+
   it('rejects a duplicate clientOrderId while the first is live, allows reuse after it clears', () => {
     const { ex } = setup();
     const first = ex.submitOrder('alice', req(M, 'buy', 'limit', u(40_000_000), u('0.01'), { clientOrderId: 'dup' }), TS++);

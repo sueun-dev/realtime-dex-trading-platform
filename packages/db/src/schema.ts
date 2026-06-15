@@ -120,14 +120,8 @@ export const positions = pgTable(
     size: money('size').notNull(),
     entryPrice: money('entry_price').notNull(),
     leverage: integer('leverage').notNull(),
-    /**
-     * Engine's EXACT isolated margin, verbatim from the event stream, or
-     * NULL when the engine never reported it (positionChanged without the
-     * PositionChangedWithMargin addendum — see projector.ts). NULL means
-     * "unknown", never an approximation; rows with NULL margin cannot be
-     * turned into a shared `Position` and fail loudly at restore/read time.
-     */
-    margin: money('margin'),
+    /** engine's EXACT isolated margin, verbatim from PositionChangedEvent.margin */
+    margin: money('margin').notNull(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.marketId] })],
 );

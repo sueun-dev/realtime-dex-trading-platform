@@ -15,6 +15,7 @@ import { OrderBookPanel } from './components/OrderBookPanel.js';
 import { OrderForm } from './components/OrderForm.js';
 import { BottomPanel } from './components/BottomPanel.js';
 import { MarketSelector } from './components/MarketSelector.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { Toasts } from './components/Toasts.js';
 
 function parseLevels(levels: BookLevelWire[] | undefined): Level[] {
@@ -37,6 +38,7 @@ interface BookMessage {
   bids?: BookLevelWire[];
   asks?: BookLevelWire[];
   seq?: number;
+  stale?: boolean;
 }
 
 export default function App() {
@@ -105,7 +107,7 @@ export default function App() {
     return unsubscribe;
   }, [token, queryClient]);
 
-  // ---- per-market streams: ticker / orderbook (snapshot+deltas) / trades ----
+  // ---- per-market streams: ticker / orderbook (snapshots only) / trades ----
   useEffect(() => {
     const ws = getWs();
     const book = useBookStore.getState();
@@ -115,15 +117,15 @@ export default function App() {
       if (isTickerWire(data)) useMarketStore.getState().setTicker(parseTicker(data));
     });
 
+    // The server only ever sends full {type:'snapshot'} orderbook frames
+    // (never deltas), so we always replace the book and thread the `stale` flag.
     const unBook = ws.subscribe(`orderbook:${selectedId}`, (data, seq) => {
       const msg = data as BookMessage | null;
       if (msg === null || typeof msg !== 'object') return;
       const bids = parseLevels(msg.bids);
       const asks = parseLevels(msg.asks);
       const msgSeq = typeof msg.seq === 'number' ? msg.seq : (seq ?? 0);
-      const store = useBookStore.getState();
-      if (msg.type === 'delta') store.applyDelta(selectedId, bids, asks, msgSeq);
-      else store.setSnapshot(selectedId, bids, asks, msgSeq);
+      useBookStore.getState().setSnapshot(selectedId, bids, asks, msgSeq, msg.stale === true);
     });
 
     const unTrades = ws.subscribe(`trades:${selectedId}`, (data) => {
@@ -139,7 +141,9 @@ export default function App() {
     api
       .orderbook(selectedId, 20)
       .then((ob) => {
-        useBookStore.getState().setSnapshot(selectedId, parseLevels(ob.bids), parseLevels(ob.asks), ob.seq);
+        useBookStore
+          .getState()
+          .setSnapshot(selectedId, parseLevels(ob.bids), parseLevels(ob.asks), ob.seq, ob.stale === true);
       })
       .catch(() => undefined);
     api
@@ -214,7 +218,11 @@ export default function App() {
     <div className="app">
       <TopBar />
       <main className="chart-area panel">
-        <ChartPanel />
+        <ErrorBoundary
+          fallback={<div className="error-fallback chart-error" role="alert">차트를 불러오지 못했습니다</div>}
+        >
+          <ChartPanel />
+        </ErrorBoundary>
       </main>
       <section className="book-area panel">
         <OrderBookPanel />

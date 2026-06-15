@@ -10,10 +10,10 @@ import {
   type EngineEvent,
   type MarketConfig,
   type Order,
+  type PositionChangedEvent,
   type Side,
   type Trade,
 } from '@dex/shared';
-import type { PositionChangedWithMargin } from '../src/index.js';
 
 export const ALICE = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 export const BOB = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -75,17 +75,13 @@ interface PositionChangedInit {
   size: bigint;
   entryPrice: bigint;
   leverage: number;
-  /**
-   * engine's exact isolated margin AFTER the change (the
-   * PositionChangedWithMargin addendum — persisted verbatim; without it the
-   * projector records the margin as NULL/unknown)
-   */
+  /** engine's exact isolated margin AFTER the change (persisted verbatim) */
   margin: bigint;
   realizedPnl?: bigint;
 }
 
 /** Build a positionChanged event carrying the engine's exact margin. */
-export function positionChanged(init: PositionChangedInit): PositionChangedWithMargin {
+export function positionChanged(init: PositionChangedInit): PositionChangedEvent {
   return {
     kind: 'positionChanged',
     seq: init.seq,

@@ -1,10 +1,15 @@
 # dex-exchange — Architecture (BINDING CONTRACT)
 
-Hyperliquid-style DEX. **Spot markets** quoted in KRW with the real Upbit KRW market
-universe (BTC, ETH, XRP, … all coins listed in Korea). **Perp markets** quoted in USDC
-with the real Hyperliquid perp universe. All market data (prices, candles, tickers,
-funding) is REAL, fetched live from Upbit and Hyperliquid public APIs. Order matching
-happens on our own engine; users trade with faucet-seeded demo balances.
+Hyperliquid-style DEX. A DEX settles in a stablecoin — **everything is quoted in USDC**
+(no fiat). **Spot markets** (`<BASE>-USDC`) mirror the real Upbit **USDT** order books
+(USDT≈USDC, both $1 pegs) — the broad Korean coin universe (BTC, ETH, XRP, …) with real
+korean names. **Perp markets** (`BASE-PERP`) are the real Hyperliquid perp universe.
+All market data (prices, orderbook prices AND sizes, candles, tickers, trades, funding,
+coin names, tick/lot sizes, max leverage) is REAL, fetched live from Upbit and
+Hyperliquid public APIs. Order matching happens on our own engine; the order book is a
+live mirror of the source venue's real depth. Users trade with faucet-seeded demo USDC
+(the ONLY non-real thing). When a venue feed goes silent the mirror takes that book DOWN
+and flags it stale — a frozen book is never presented as live.
 
 ## Monorepo layout (pnpm workspaces)
 
@@ -23,15 +28,22 @@ happens on our own engine; users trade with faucet-seeded demo balances.
 1. **All money/qty/price values are `bigint` fixed-point with scale 1e8** (`SCALE = 10n**8n`).
    Use `@dex/shared` `toUnits`/`fromUnits`/`mulDiv`. **Never use JS `number` for money.**
    Over the wire (JSON/API/DB rows) bigint values are serialized as **decimal strings**
-   (e.g. `"93130000"` KRW). zod schemas in shared handle the conversion.
+   (e.g. `"61300"` USDC). zod schemas in shared handle the conversion.
 2. **ESM everywhere** (`"type": "module"`), TypeScript strict, NodeNext resolution.
    Imports inside packages use relative paths **with `.js` extension**.
 3. Engine is **pure & synchronous**: every mutation returns `EngineEvent[]`. The API
-   layer persists events to DB (write-behind projection) and broadcasts over WS.
-   The engine state is the source of truth at runtime; DB is the durable projection
-   reloaded at boot.
-4. Market IDs: spot = `KRW-BTC` (Upbit format), perp = `BTC-PERP`.
+   layer persists events to DB (write-behind projection) and broadcasts over WS, all
+   on one serialized FIFO pipeline. The engine state is the source of truth at runtime;
+   DB is the durable projection reloaded at boot. **Durability: the pipeline fail-stops
+   (poisons) on a projection failure** so the engine and durable store can never
+   silently diverge; the process exits and boot-restore re-establishes consistency.
+4. Market IDs: spot = `BTC-USDC` (sourced from Upbit code `USDT-BTC`), perp = `BTC-PERP`.
 5. Sequencing: engine assigns a monotonically increasing `seq` to every event.
+6. **Memory is bounded**: the engine's live `orders` map holds only resting orders
+   (terminal orders move to a bounded 20k cache); the DB has a retention GC that prunes
+   terminal orders + caps trades/funding/liquidations — so the book mirror's high-churn
+   requoting cannot grow memory/disk without bound.
+7. `clientOrderId` is unique among a user's LIVE orders (`DUPLICATE_CLIENT_ORDER_ID`).
 
 ## Matching engine semantics
 
@@ -40,12 +52,10 @@ happens on our own engine; users trade with faucet-seeded demo balances.
 - Market orders: spot buys specify quote notional OR base qty (we use base qty + max
   slippage guard vs best price); reject remainder (cancel rest) when book exhausted.
 - Self-trade prevention: cancel resting order (cancel-maker) when both sides same user.
-- Fees in bps on the quote amount: spot maker 5 / taker 10; perp maker 2 / taker 5.
-  Fees deducted from quote proceeds (sell) / charged on top is WRONG — fee is taken
-  from received amounts: buyer pays quote, receives base minus nothing (spot fee
-  charged in quote currency on notional); implementer: charge fee in quote currency
-  for both sides, deducted from quote balance (buyer pays notional+fee, seller
-  receives notional-fee). Perp fees deducted from USDC collateral.
+- **House commission: flat 0.02% (2 bps) on every fill**, both maker and taker roles,
+  spot and perp. Fee is charged in the quote currency (USDC) on the fill notional:
+  buyer pays notional+fee, seller receives notional−fee; perp fees come out of the
+  released-lock/collateral. Fees accrue to `FEE_ACCOUNT`.
 - Spot balance model: per-asset `available`/`locked`. Placing a buy locks
   `notional+maxFee` in quote; placing a sell locks base qty. Fills release locks
   proportionally. Cancels release remaining locks. **Invariant: available ≥ 0,
@@ -133,20 +143,23 @@ few units per fill), absent liquidation-clamp (bad-debt) events.
 
 ## Engine events (emitted, persisted, broadcast)
 
-`orderAccepted, orderRejected, orderFilled (per fill, maker+taker info), orderCancelled,
-tradeExecuted, balanceChanged, positionChanged, liquidation, fundingApplied, markPrice`
+`orderAccepted, orderRejected, orderCancelled, trade (per fill, embeds post-fill
+maker+taker order states), balanceChanged, positionChanged (carries exact margin),
+liquidation, fundingApplied, markPrice` — see `@dex/shared` `events.ts` for the exact
+discriminated union.
 
 ## REST API (prefix /api)
 
-- `GET /api/health`
+- `GET /api/health` (liveness) · `GET /api/ready` (readiness: 503 until feeds warm + perp marks present)
 - `GET /api/markets` — all markets w/ config + 24h stats
-- `GET /api/markets/:id/orderbook?depth=20`
-- `GET /api/markets/:id/trades?limit=50`
+- `GET /api/markets/:id/orderbook?depth=20` — includes `stale` flag (venue feed down)
+- `GET /api/markets/:id/trades?limit=50` — the live tape (real venue prints + our fills)
+- `GET /api/stats/fees` — house commission (FEE_ACCOUNT) per asset
 - `GET /api/markets/:id/candles?interval=1m|5m|15m|1h|4h|1d&limit=200` — REAL candles proxied+cached from Upbit (spot) / Hyperliquid (perp)
 - `POST /api/auth/nonce {address}` → `{nonce}`
 - `POST /api/auth/verify {address, signature}` → `{token}` (JWT; viem verifyMessage)
 - Authed (Bearer): `GET /api/account` (balances, positions, equity),
-  `POST /api/account/faucet` (seed demo KRW+USDC, once per account),
+  `POST /api/account/faucet` (seed demo USDC, atomically once per account),
   `POST /api/orders` (zod-validated OrderRequest), `DELETE /api/orders/:id`,
   `GET /api/orders?status=open`, `GET /api/fills`, `POST /api/account/leverage {marketId, leverage}`
 - Errors: `{error: {code, message}}`, HTTP 400/401/404/409/422.
@@ -154,18 +167,23 @@ tradeExecuted, balanceChanged, positionChanged, liquidation, fundingApplied, mar
 ## WebSocket (path /ws)
 
 JSON messages `{op: 'subscribe'|'unsubscribe', channel, market?}`,
-channels: `ticker:<mkt>`, `orderbook:<mkt>` (snapshot then deltas), `trades:<mkt>`,
+channels: `ticker:<mkt>`, `orderbook:<mkt>` (throttled full **snapshots** — `data`
+carries `{type:'snapshot', stale, bids, asks, seq}`; no deltas), `trades:<mkt>`,
 `allTickers`, and authed `user` (orders/fills/balances/positions) via
 `{op:'auth', token}`. Server → `{channel, data, seq}`.
 
 ## Real data flow
 
-- Boot: load real Upbit KRW market list (`/v1/market/all`) → spot market configs;
-  real Hyperliquid `meta` → perp configs.
-- Live: Upbit WS (`wss://api.upbit.com/websocket/v1`, ticker+trade) and Hyperliquid
-  WS (`wss://api.hyperliquid.xyz/ws`, allMids) → price cache → engine mark prices
-  (perp) + ticker broadcast. REST fallback polling if WS drops. Candles proxied
-  with a 5s cache.
+- Boot: load real Upbit market list (`/v1/market/all`), keep `USDT-*` → relabel to
+  `<BASE>-USDC` spot configs; real Hyperliquid `meta` → perp configs.
+- Live: Upbit WS (`wss://api.upbit.com/websocket/v1`, ticker+trade+orderbook) and
+  Hyperliquid WS (`wss://api.hyperliquid.xyz/ws`, allMids + l2Book + trades) → the book
+  mirror replicates the real venue depth into the engine, the price cache drives ticker
+  broadcasts, and perp mids set engine mark prices. REST fallback polling (spot tickers
+  AND perp mids) keeps data fresh if a WS drops; a staleness watchdog takes a book down
+  + flags it stale if its venue feed goes silent. Candles proxied with a 5s cache.
+  Perp 24h stats come from real HL 1h candles (tickers suppressed until real stats load —
+  never fabricated placeholders).
 
 ## Testing (vitest; brutal by design)
 

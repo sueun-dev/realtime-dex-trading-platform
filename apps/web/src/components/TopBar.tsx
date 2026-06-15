@@ -2,9 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { koMessage } from '../lib/api.js';
 import { useAuthStore } from '../lib/auth.js';
 import { getWs } from '../lib/ws.js';
+import type { WsStatus } from '../lib/ws.js';
 import { formatAmount, formatPct, formatPrice, truncateAddress } from '../lib/format.js';
 import { useMarketStore } from '../stores/market.js';
 import { toast } from '../stores/toast.js';
+
+const WS_LABEL: Record<WsStatus, string> = {
+  open: 'LIVE',
+  connecting: '재연결 중…',
+  closed: '연결 끊김',
+};
 
 export function TopBar() {
   const market = useMarketStore((s) => s.byId[s.selectedId]);
@@ -13,6 +20,13 @@ export function TopBar() {
   const address = useAuthStore((s) => s.address);
   const login = useAuthStore((s) => s.login);
   const [connecting, setConnecting] = useState(false);
+  const [wsStatus, setWsStatus] = useState<WsStatus>(() => getWs().status);
+
+  useEffect(() => {
+    const ws = getWs();
+    setWsStatus(ws.status);
+    return ws.onStatus(setWsStatus);
+  }, []);
 
   const changeCls = ticker === undefined ? '' : ticker.change24h > 0n ? 'pos' : ticker.change24h < 0n ? 'neg' : '';
 
@@ -83,6 +97,17 @@ export function TopBar() {
 
       <span className={`badge ${market?.type === 'perp' ? 'perp' : 'spot'}`}>
         {market?.type === 'perp' ? 'PERP' : 'USDC'}
+      </span>
+
+      <span
+        className={`ws-status ${wsStatus === 'open' ? 'live' : 'down'}`}
+        data-testid="ws-status"
+        role="status"
+        aria-label={`연결 상태: ${WS_LABEL[wsStatus]}`}
+        title={WS_LABEL[wsStatus]}
+      >
+        <span className="ws-dot" aria-hidden="true" />
+        {WS_LABEL[wsStatus]}
       </span>
 
       <button

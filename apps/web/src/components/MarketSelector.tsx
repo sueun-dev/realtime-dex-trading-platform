@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import type { Market } from '../lib/api.js';
 import { formatPct, formatPrice } from '../lib/format.js';
 import { useMarketStore } from '../stores/market.js';
@@ -30,6 +31,16 @@ export function MarketSelector() {
   const selectMarket = useMarketStore((s) => s.selectMarket);
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<FilterTab>('all');
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  // Element focused before the modal opened, so we can restore focus on close.
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  // Remember the trigger (market button) when the modal opens.
+  useEffect(() => {
+    if (open) {
+      restoreFocusRef.current = document.activeElement as HTMLElement | null;
+    }
+  }, [open]);
 
   const filtered = useMemo(
     () => markets.filter((m) => (tab === 'all' || m.type === tab) && matches(m, query)),
@@ -38,9 +49,49 @@ export function MarketSelector() {
 
   if (!open) return null;
 
+  const close = (): void => {
+    setOpen(false);
+    // Restore focus to the trigger (market button) for keyboard users.
+    restoreFocusRef.current?.focus?.();
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      close();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    // Trap Tab within the modal.
+    const root = modalRef.current;
+    if (root === null) return;
+    const focusable = root.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
-    <div className="modal-overlay" data-testid="market-selector" onClick={() => setOpen(false)}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" data-testid="market-selector" onClick={close}>
+      <div
+        className="modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="마켓 선택"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+      >
         <div className="modal-head">
           <input
             type="text"
@@ -49,15 +100,16 @@ export function MarketSelector() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <button type="button" className="close-btn dim" aria-label="닫기" onClick={() => setOpen(false)}>
+          <button type="button" className="close-btn dim" aria-label="닫기" onClick={close}>
             ✕
           </button>
         </div>
-        <div className="tabs">
+        <div className="tabs" role="group" aria-label="마켓 필터">
           {TABS.map((t) => (
             <button
               key={t.key}
               type="button"
+              aria-pressed={tab === t.key}
               className={`tab ${tab === t.key ? 'active' : ''}`}
               onClick={() => setTab(t.key)}
             >

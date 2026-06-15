@@ -26,6 +26,18 @@ function parseUnitsSafe(s: string): bigint | null {
 
 const PCT_OPTIONS = [25, 50, 75, 100] as const;
 
+/**
+ * Effective price the engine will lock for a market order: best±5% slippage
+ * bound, tick-aligned. Buys round up at +5%, sells round down at -5%. Sizing
+ * (applyPct) and submission must use the SAME bound, otherwise a 100% market
+ * order is sized against the raw best price but locked at the inflated bound →
+ * INSUFFICIENT_BALANCE/MARGIN.
+ */
+export function marketBound(best: bigint, side: Side, tickSize: bigint): bigint {
+  const raw = side === 'buy' ? mulDiv(best, 105n, 100n) : mulDiv(best, 95n, 100n);
+  return roundToTick(raw, tickSize, side === 'buy' ? 'ceil' : 'floor');
+}
+
 export function OrderForm() {
   const market = useMarketStore((s) => s.byId[s.selectedId]);
   const bestAsk = useBookStore((s) => s.asks[0]?.price);
@@ -89,10 +101,20 @@ export function OrderForm() {
       toast.error(type === 'market' ? '호가 정보가 없습니다' : '가격을 먼저 입력해주세요');
       return;
     }
-    const budget = (available * BigInt(pct)) / 100n;
+    // For market orders, the engine locks at the slippage-bound price (best±5%),
+    // not the raw best. Size against that SAME bound so 100% never over-sizes.
+    const priceForSizing =
+      type === 'market' ? marketBound(referencePrice, side, market.tickSize) : referencePrice;
+    if (priceForSizing <= 0n) return;
+    // 100% market orders get a 0.1% safety haircut so tick/fee rounding can't
+    // tip the locked cost just past the available balance.
+    const budget =
+      type === 'market' && pct === 100
+        ? (available * 999n) / 1000n
+        : (available * BigInt(pct)) / 100n;
     // per-unit cost: margin (notional/leverage for perps) + worst-case taker fee
     const lev = isPerp ? BigInt(leverage) : 1n;
-    const perUnit = divRound(referencePrice, lev, 'ceil') + feeOn(referencePrice, market.takerFeeBps);
+    const perUnit = divRound(priceForSizing, lev, 'ceil') + feeOn(priceForSizing, market.takerFeeBps);
     if (perUnit <= 0n) return;
     const target = roundToLot(divRound(budget * 10n ** 8n, perUnit, 'floor'), market.lotSize);
     setQtyStr(fromUnits(target));
@@ -134,8 +156,7 @@ export function OrderForm() {
         toast.error('호가 정보가 없습니다');
         return;
       }
-      const raw = side === 'buy' ? mulDiv(base, 105n, 100n) : mulDiv(base, 95n, 100n);
-      price = roundToTick(raw, market.tickSize, side === 'buy' ? 'ceil' : 'floor');
+      price = marketBound(base, side, market.tickSize);
       tif = 'IOC';
     }
 
@@ -169,9 +190,10 @@ export function OrderForm() {
 
   return (
     <div className="order-form" data-testid="order-form">
-      <div className="side-toggle">
+      <div className="side-toggle" role="group" aria-label="주문 방향">
         <button
           type="button"
+          aria-pressed={side === 'buy'}
           className={`side-btn buy ${side === 'buy' ? 'active' : ''}`}
           onClick={() => setSide('buy')}
         >
@@ -179,6 +201,7 @@ export function OrderForm() {
         </button>
         <button
           type="button"
+          aria-pressed={side === 'sell'}
           className={`side-btn sell ${side === 'sell' ? 'active' : ''}`}
           onClick={() => setSide('sell')}
         >
@@ -186,11 +209,21 @@ export function OrderForm() {
         </button>
       </div>
 
-      <div className="tabs type-tabs">
-        <button type="button" className={`tab ${type === 'limit' ? 'active' : ''}`} onClick={() => setType('limit')}>
+      <div className="tabs type-tabs" role="group" aria-label="주문 유형">
+        <button
+          type="button"
+          aria-pressed={type === 'limit'}
+          className={`tab ${type === 'limit' ? 'active' : ''}`}
+          onClick={() => setType('limit')}
+        >
           지정가
         </button>
-        <button type="button" className={`tab ${type === 'market' ? 'active' : ''}`} onClick={() => setType('market')}>
+        <button
+          type="button"
+          aria-pressed={type === 'market'}
+          className={`tab ${type === 'market' ? 'active' : ''}`}
+          onClick={() => setType('market')}
+        >
           시장가
         </button>
       </div>

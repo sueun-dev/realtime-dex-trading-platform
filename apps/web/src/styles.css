@@ -1083,3 +1083,90 @@ input[type='range']:focus {
     display: none;
   }
 }
+
+/* --- Keyboard focus visibility on the very dark theme --- */
+button:focus-visible,
+.tab:focus-visible,
+.pct-btn:focus-visible,
+.side-btn:focus-visible,
+[role='tab']:focus-visible,
+.market-row:focus-visible {
+  outline: 2px solid var(--green-bright);
+  outline-offset: 2px;
+}
+
+/* --- WS connection status pill (TopBar) --- */
+.ws-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ws-status .ws-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ws-status.live {
+  color: var(--green-bright);
+  border-color: rgba(47, 214, 171, 0.35);
+}
+
+.ws-status.down {
+  color: var(--red-soft);
+  border-color: rgba(240, 86, 111, 0.4);
+}
+
+/* --- Orderbook stale / feed-delay indicator --- */
+.book-panel.stale .ob {
+  opacity: 0.55;
+  filter: grayscale(0.4);
+}
+
+.stale-badge {
+  margin-left: auto;
+  align-self: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--red-soft);
+  border: 1px solid rgba(240, 86, 111, 0.4);
+  background: rgba(240, 86, 111, 0.08);
+}
+
+/* --- Error boundary fallback --- */
+.error-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  min-height: 160px;
+  padding: 24px;
+  text-align: center;
+}
+
+.error-fallback-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.error-fallback-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.error-fallback.chart-error {
+  color: var(--text-dim);
+}

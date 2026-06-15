@@ -87,29 +87,42 @@ export function ChartPanel() {
     if (series === null || chart === null || data === undefined) return;
     const sorted = [...data].sort((a, b) => a.t - b.t).filter((c, i, arr) => i === 0 || c.t !== arr[i - 1]!.t);
     // chart rendering is display-only: Number() conversion is allowed here
-    series.setData(
-      sorted.map((c) => ({
-        time: Math.floor(c.t / 1000) as UTCTimestamp,
-        open: Number(c.o),
-        high: Number(c.h),
-        low: Number(c.l),
-        close: Number(c.c),
-      })),
-    );
+    const toBar = (c: (typeof sorted)[number]) => ({
+      time: Math.floor(c.t / 1000) as UTCTimestamp,
+      open: Number(c.o),
+      high: Number(c.h),
+      low: Number(c.l),
+      close: Number(c.c),
+    });
+
     const key = `${marketId}:${interval}`;
-    if (fittedKeyRef.current !== key) {
+    const isReset = fittedKeyRef.current !== key;
+
+    if (isReset) {
+      // Initial load / market or interval change: full replace + fit the range.
+      series.setData(sorted.map(toBar));
       fittedKeyRef.current = key;
       chart.timeScale().fitContent();
+      return;
+    }
+
+    // Subsequent refetches (every 5s): update only the trailing candle(s) so the
+    // user's current zoom/pan is preserved. update() upserts by time, so pushing
+    // the last two bars covers both a refreshed current candle and a new one.
+    for (const c of sorted.slice(-2)) {
+      series.update(toBar(c));
     }
   }, [data, marketId, interval]);
 
   return (
     <div className="chart-panel">
-      <div className="tabs chart-tabs">
+      <div className="tabs chart-tabs" role="tablist" aria-label="차트 간격">
         {INTERVALS.map((iv) => (
           <button
             key={iv}
             type="button"
+            role="tab"
+            aria-selected={interval === iv}
             className={`tab ${interval === iv ? 'active' : ''}`}
             onClick={() => setIntervalValue(iv)}
           >

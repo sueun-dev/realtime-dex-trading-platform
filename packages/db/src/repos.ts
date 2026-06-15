@@ -78,25 +78,8 @@ function toTrade(r: TradeSelect): Trade {
   };
 }
 
-/**
- * Convert a projected row into a shared `Position`. `Position.margin` is the
- * engine's EXACT isolated margin — a NULL projected margin means the engine
- * emitted `positionChanged` without the `PositionChangedWithMargin` addendum
- * (see projector.ts), so an exact `Position` cannot be constructed: the
- * margin is not derivable from size/entry/leverage, and fabricating one
- * would break the conservation invariant and liquidation semantics after a
- * restore. Fail loudly instead of approximating.
- */
+/** Convert a projected row into a shared `Position` (margin is NOT NULL by schema). */
 function toPosition(r: PositionSelect): Position {
-  if (r.margin === null) {
-    throw new Error(
-      `position ${r.userId} ${r.marketId} has an unknown isolated margin: the engine emitted ` +
-        `positionChanged without the exact \`margin: bigint\` field ` +
-        `(PositionChangedWithMargin addendum in @dex/db, pending upstream in @dex/shared). ` +
-        `The exact margin cannot be re-derived from size/entry/leverage, so this position ` +
-        `cannot be restored or read as a Position without corrupting money state.`,
-    );
-  }
   return {
     userId: r.userId,
     marketId: r.marketId,

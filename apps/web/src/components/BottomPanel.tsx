@@ -59,10 +59,12 @@ export function PositionsTable() {
         {positions.map((p) => {
           const market = byId[p.marketId];
           const tickSize = market?.tickSize ?? 1n;
-          const mark = tickers[p.marketId]?.price ?? p.entryPrice;
-          const uPnl = mulUnits(p.size, mark - p.entryPrice);
-          const roe = p.margin > 0n ? divUnits(uPnl, p.margin) : 0n;
-          const cls = uPnl > 0n ? 'pos' : uPnl < 0n ? 'neg' : '';
+          // Only a real ticker price is a valid mark. When the feed is missing,
+          // do NOT substitute entryPrice — that fabricates a +0 / 0.00% PnL.
+          const mark = tickers[p.marketId]?.price ?? null;
+          const uPnl = mark !== null ? mulUnits(p.size, mark - p.entryPrice) : null;
+          const roe = mark !== null && p.margin > 0n ? divUnits(uPnl ?? 0n, p.margin) : 0n;
+          const cls = uPnl === null ? '' : uPnl > 0n ? 'pos' : uPnl < 0n ? 'neg' : '';
           const long = p.size > 0n;
           return (
             <tr key={p.marketId}>
@@ -72,12 +74,18 @@ export function PositionsTable() {
               </td>
               <td>{formatQty(absBig(p.size))}</td>
               <td>{formatPrice(p.entryPrice, tickSize)}</td>
-              <td>{formatPrice(mark, tickSize)}</td>
+              <td>{mark !== null ? formatPrice(mark, tickSize) : <span className="dim">—</span>}</td>
               <td>
-                <span className={`pnl ${cls}`} data-testid={`pnl-${p.marketId}`}>
-                  {uPnl > 0n ? '+' : ''}
-                  {formatAmount(uPnl)} ({formatPct(roe)})
-                </span>
+                {uPnl !== null ? (
+                  <span className={`pnl ${cls}`} data-testid={`pnl-${p.marketId}`}>
+                    {uPnl > 0n ? '+' : ''}
+                    {formatAmount(uPnl)} ({formatPct(roe)})
+                  </span>
+                ) : (
+                  <span className="pnl dim" data-testid={`pnl-${p.marketId}`}>
+                    —
+                  </span>
+                )}
               </td>
               <td>{formatAmount(p.margin)}</td>
               <td>{p.leverage}x</td>
@@ -85,7 +93,9 @@ export function PositionsTable() {
                 <button
                   type="button"
                   className="small-btn danger"
+                  disabled={mark === null}
                   onClick={() => {
+                    if (mark === null) return;
                     void closePosition(p.marketId, p.size, mark, tickSize);
                   }}
                 >
@@ -278,11 +288,13 @@ export function BottomPanel() {
 
   return (
     <div className="bottom-panel">
-      <div className="tabs">
+      <div className="tabs" role="tablist" aria-label="계정 정보">
         {tabs.map((t) => (
           <button
             key={t.key}
             type="button"
+            role="tab"
+            aria-selected={tab === t.key}
             className={`tab ${tab === t.key ? 'active' : ''}`}
             onClick={() => setTab(t.key)}
           >

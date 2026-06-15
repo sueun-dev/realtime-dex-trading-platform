@@ -91,15 +91,10 @@ CREATE TABLE IF NOT EXISTS positions (
   size numeric(38,0) NOT NULL,
   entry_price numeric(38,0) NOT NULL,
   leverage integer NOT NULL,
-  -- engine's exact isolated margin, verbatim; NULL = engine never reported it
-  -- (positionChanged without the PositionChangedWithMargin addendum). Never
-  -- an approximation — see projector.ts / schema.ts.
-  margin numeric(38,0),
+  -- engine's exact isolated margin, verbatim from PositionChangedEvent.margin
+  margin numeric(38,0) NOT NULL,
   PRIMARY KEY (user_id, market_id)
 );
--- Upgrade for databases created when margin was NOT NULL (idempotent: a
--- DROP NOT NULL on an already-nullable column is a no-op).
-ALTER TABLE positions ALTER COLUMN margin DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS user_market_leverage (
   user_id text NOT NULL,

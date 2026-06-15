@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { PGlite } from '@electric-sql/pglite';
 import { createDb, runMigrations, type DbHandle } from '../src/index.js';
 
 const EXPECTED_TABLES = [
@@ -78,47 +77,13 @@ describe('migrations', () => {
     expect(after.rows).toEqual([{ value: '123' }]); // live cursor untouched
   });
 
-  it('positions.margin is nullable (NULL = engine never reported the exact margin)', async () => {
+  it('positions.margin is NOT NULL (engine always emits the exact margin)', async () => {
     handle = await createDb();
     const col = await handle.pglite.query<{ is_nullable: string }>(
       `select is_nullable from information_schema.columns
        where table_name = 'positions' and column_name = 'margin'`,
     );
-    expect(col.rows[0]?.is_nullable).toBe('YES');
-  });
-
-  it('upgrades a legacy database whose positions.margin was NOT NULL', async () => {
-    const pglite = new PGlite('memory://');
-    await pglite.waitReady;
-    try {
-      // old DDL shape (pre-addendum): margin NOT NULL
-      await pglite.exec(`
-        CREATE TABLE positions (
-          user_id text NOT NULL,
-          market_id text NOT NULL,
-          size numeric(38,0) NOT NULL,
-          entry_price numeric(38,0) NOT NULL,
-          leverage integer NOT NULL,
-          margin numeric(38,0) NOT NULL,
-          PRIMARY KEY (user_id, market_id)
-        );
-      `);
-      await pglite.query(
-        `insert into positions values ('0xaa', 'BTC-PERP', '100000000', '5000000000000', 10, '499000000003')`,
-      );
-
-      await runMigrations(pglite); // must relax NOT NULL without touching data
-
-      const col = await pglite.query<{ is_nullable: string }>(
-        `select is_nullable from information_schema.columns
-         where table_name = 'positions' and column_name = 'margin'`,
-      );
-      expect(col.rows[0]?.is_nullable).toBe('YES');
-      const row = await pglite.query<{ margin: string }>('select margin from positions');
-      expect(row.rows[0]?.margin).toBe('499000000003'); // data untouched
-    } finally {
-      await pglite.close();
-    }
+    expect(col.rows[0]?.is_nullable).toBe('NO');
   });
 
   it('money columns are numeric(38,0)', async () => {

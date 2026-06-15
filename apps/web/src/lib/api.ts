@@ -132,6 +132,8 @@ export interface OrderbookWire {
   bids: BookLevelWire[];
   asks: BookLevelWire[];
   seq: number;
+  /** True when the upstream venue feed is frozen/down — don't present as live. */
+  stale?: boolean;
 }
 
 export interface TradeWire {

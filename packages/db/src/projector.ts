@@ -29,23 +29,11 @@
  * Exact-margin handling (money-path correctness): the engine's isolated
  * `position.margin` CANNOT be re-derived from size/entry/leverage — it
  * diverges by fill fees taken from the released lock, funding payments
- * applied directly to margin, and PnL/rounding on partial reduces. Persisting
- * any approximation would break the conservation invariant
- * (ARCHITECTURE.md "Perp accounting") and liquidation semantics after a boot
- * restore. `PositionChangedEvent` in `@dex/shared` does not (yet) carry the
- * margin, so the projector accepts BOTH shapes without ever approximating:
- *
- * - event carries `margin: bigint` (the {@link PositionChangedWithMargin}
- *   addendum, pending upstream): persisted VERBATIM — full restore fidelity.
- * - event conforms exactly to the published contract (no margin): the
- *   position row is persisted with `margin = NULL`, meaning "engine did not
- *   report its exact isolated margin". NULL is an honest unknown, never an
- *   approximation; reads that require an exact `Position` (restore) fail
- *   loudly on such rows instead (see repos.ts `toPosition`).
- *
- * Funding payments are mirrored onto the projected margin so the projection
- * stays exact between position changes (NULL margin stays NULL — unknown
- * plus a delta is still unknown).
+ * applied directly to margin, and PnL/rounding on partial reduces. So
+ * `PositionChangedEvent` carries the engine's EXACT margin (`margin: bigint`),
+ * persisted verbatim for full boot-restore fidelity. Funding payments are
+ * mirrored onto the projected margin so it stays exact between position
+ * changes.
  */
 import { and, eq, sql } from 'drizzle-orm';
 import type {
@@ -65,41 +53,6 @@ import * as s from './schema.js';
 export const LAST_APPLIED_SEQ_KEY = 'last_applied_seq';
 export const MARK_PRICE_KEY_PREFIX = 'mark:';
 
-/**
- * Contract addendum (pending upstream in `@dex/shared`): `positionChanged`
- * events SHOULD carry the engine's exact isolated margin AFTER the change.
- * Events without it still conform to the published contract and are
- * projected (with `margin = NULL`), but exact boot-restore of open positions
- * is only possible when the engine emits this field. Once `margin: bigint`
- * is added to `PositionChangedEvent` in `@dex/shared` this type becomes
- * redundant and can be deleted.
- */
-export interface PositionChangedWithMargin extends PositionChangedEvent {
-  /** engine's exact isolated margin AFTER this change (1e8 quote units) */
-  margin: bigint;
-}
-
-/**
- * Returns the engine's exact margin when the event carries the
- * {@link PositionChangedWithMargin} addendum, or `null` when the event
- * conforms exactly to the published `@dex/shared` contract (no margin field).
- * A margin that is PRESENT but not a bigint is corruption (e.g. a JS number
- * that already lost precision) and throws — persisting it could corrupt
- * money state.
- */
-function extractExactMargin(e: PositionChangedEvent): bigint | null {
-  const { margin } = e as Partial<PositionChangedWithMargin>;
-  if (margin === undefined) return null; // contract-conforming event — margin unknown
-  if (typeof margin !== 'bigint') {
-    throw new TypeError(
-      `positionChanged seq=${e.seq} (${e.userId} ${e.marketId}) carries a malformed margin ` +
-        `(${typeof margin}); the engine's exact isolated margin must be a bigint ` +
-        `(see PositionChangedWithMargin in @dex/db). Refusing to persist a possibly ` +
-        `precision-lossy value.`,
-    );
-  }
-  return margin;
-}
 
 async function readLastAppliedSeq(ex: DbExecutor): Promise<number> {
   // FOR UPDATE: serializes concurrent applyBatch transactions on the
@@ -226,7 +179,6 @@ async function applyPositionChanged(ex: DbExecutor, e: PositionChangedEvent): Pr
       .where(and(eq(s.positions.userId, e.userId), eq(s.positions.marketId, e.marketId)));
     return;
   }
-  const margin = extractExactMargin(e);
   await ex
     .insert(s.positions)
     .values({
@@ -235,11 +187,11 @@ async function applyPositionChanged(ex: DbExecutor, e: PositionChangedEvent): Pr
       size: e.size,
       entryPrice: e.entryPrice,
       leverage: e.leverage,
-      margin,
+      margin: e.margin, // engine's exact isolated margin, verbatim
     })
     .onConflictDoUpdate({
       target: [s.positions.userId, s.positions.marketId],
-      set: { size: e.size, entryPrice: e.entryPrice, leverage: e.leverage, margin },
+      set: { size: e.size, entryPrice: e.entryPrice, leverage: e.leverage, margin: e.margin },
     });
 }
 
@@ -268,8 +220,7 @@ async function applyFunding(ex: DbExecutor, e: FundingAppliedEvent): Promise<voi
   // (ARCHITECTURE.md "Funding": eroded margin can trigger liquidation).
   // Mirror it onto the projection so a funding-eroded margin survives a boot
   // restore exactly instead of snapping back to its last positionChanged
-  // value. A NULL (unknown) margin stays NULL: in SQL, NULL + payment = NULL,
-  // which is exactly right — unknown plus a delta is still unknown.
+  // value.
   // fundingApplied is emitted per position holder, so the row must exist — a
   // missing row means a corrupted/partial stream. NOTE for the engine
   // (cross-package assumption): the per-market funding rounding remainder

@@ -16,7 +16,11 @@ export interface TradeRow {
 
 const MAX_TRADES = 60;
 
-/** Merge delta levels into a sorted book side. qty 0 removes the level. */
+/**
+ * Merge sorted book levels. qty 0 removes the level. Retained as a pure,
+ * exported helper (unit-tested in test/orderbook.test.tsx) — the live feed is
+ * snapshots-only, so the store no longer wires a delta-merge path.
+ */
 export function mergeLevels(existing: Level[], updates: Level[], descending: boolean): Level[] {
   const map = new Map<bigint, bigint>();
   for (const l of existing) map.set(l.price, l.qty);
@@ -39,10 +43,13 @@ export interface BookState {
   bids: Level[];
   asks: Level[];
   seq: number;
+  /** Server-reported staleness of the venue feed; true → don't present as live. */
+  stale: boolean;
   trades: TradeRow[];
   resetFor: (marketId: string) => void;
-  setSnapshot: (marketId: string, bids: Level[], asks: Level[], seq: number) => void;
-  applyDelta: (marketId: string, bids: Level[], asks: Level[], seq: number) => void;
+  // The live feed only ever sends full snapshots (never deltas). `stale` is
+  // optional so existing/test callers that omit it keep working.
+  setSnapshot: (marketId: string, bids: Level[], asks: Level[], seq: number, stale?: boolean) => void;
   setTrades: (marketId: string, rows: TradeRow[]) => void;
   pushTrades: (marketId: string, rows: TradeRow[]) => void;
 }
@@ -52,27 +59,17 @@ export const useBookStore = create<BookState>()((set) => ({
   bids: [],
   asks: [],
   seq: 0,
+  stale: false,
   trades: [],
 
-  resetFor: (marketId) => set({ marketId, bids: [], asks: [], seq: 0, trades: [] }),
+  resetFor: (marketId) => set({ marketId, bids: [], asks: [], seq: 0, stale: false, trades: [] }),
 
-  setSnapshot: (marketId, bids, asks, seq) =>
+  setSnapshot: (marketId, bids, asks, seq, stale = false) =>
     set((s) => {
       if (s.marketId !== null && s.marketId !== marketId) return s;
       // never let a stale REST seed clobber a fresher WS snapshot
       if (s.marketId === marketId && seq > 0 && seq < s.seq) return s;
-      return { marketId, bids, asks, seq };
-    }),
-
-  applyDelta: (marketId, bids, asks, seq) =>
-    set((s) => {
-      if (s.marketId !== marketId) return s;
-      if (seq > 0 && seq <= s.seq) return s;
-      return {
-        bids: mergeLevels(s.bids, bids, true),
-        asks: mergeLevels(s.asks, asks, false),
-        seq: seq > 0 ? seq : s.seq,
-      };
+      return { marketId, bids, asks, seq, stale };
     }),
 
   setTrades: (marketId, rows) =>
