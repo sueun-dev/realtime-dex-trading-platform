@@ -67,8 +67,13 @@ export class Exchange {
   private readonly leverages = new Map<string, number>();
   private readonly markPrices = new Map<string, bigint>();
   private seqCounter = 0;
+  /** when true, bad debt that insurance can't cover is socialized via ADL
+   * (auto-deleveraging profitable counterparties) before the house clearing
+   * account absorbs the irreducible remainder. Off by default. */
+  private readonly adlEnabled: boolean;
 
-  constructor(opts?: { markets?: MarketConfig[] }) {
+  constructor(opts?: { markets?: MarketConfig[]; adl?: boolean }) {
+    this.adlEnabled = opts?.adl ?? false;
     for (const m of opts?.markets ?? []) this.addMarket(m);
   }
 
@@ -847,14 +852,16 @@ export class Exchange {
       if (payout > 0n) this.ledger.credit(userId, m.quote, payout);
       let feeCover = 0n;
       if (pot < 0n) {
-        // bad debt: insurance (FEE_ACCOUNT) covers, clearing absorbs the rest
+        // bad-debt waterfall: insurance (FEE_ACCOUNT) → ADL (socialize onto
+        // profitable counterparties) → house clearing absorbs the remainder
         const deficit = -pot;
         feeCover = minBig(deficit, maxBig(this.ledger.available(FEE_ACCOUNT, m.quote), 0n));
         if (feeCover > 0n) this.ledger.debit(FEE_ACCOUNT, m.quote, feeCover);
-        const rest = deficit - feeCover;
+        let rest = deficit - feeCover;
+        rest = this.adlClawback(ms, mark, rest, evts, ts);
         if (rest > 0n) this.ledger.credit(CLEARING_ACCOUNT, m.quote, -rest);
       }
-      evts.push({ kind: 'liquidation', seq: this.nextSeq(), ts, userId, marketId: m.id, size, markPrice: mark });
+      evts.push({ kind: 'liquidation', seq: this.nextSeq(), ts, userId, marketId: m.id, size, markPrice: mark, reason: 'maintenance' });
       evts.push({
         kind: 'positionChanged',
         seq: this.nextSeq(),
@@ -878,6 +885,69 @@ export class Exchange {
         }
       }
     }
+  }
+
+  /**
+   * Auto-deleveraging: socialize `rest` of bad debt onto the most-profitable,
+   * highest-leverage counterparties (ranked by uPnL × leverage, like a real
+   * venue). Each is force-closed at mark, but its payout is HAIRCUT by its share
+   * of the deficit — so it gives up part of its profit to fund the shortfall and
+   * the house clearing account stays whole. The haircut never exceeds a winner's
+   * profit, so no ADL'd account ever drops below its own margin (no user is
+   * pushed negative). Returns the deficit still uncovered after ADL (0 when fully
+   * socialized; > 0 only if there isn't enough open profit to absorb it).
+   * No-op unless ADL is enabled. Conservation is exact: each close moves
+   * −margin (positions) − realized (clearing mirror) + (margin + realized −
+   * haircut) (user) = −haircut, matching the deficit it retires.
+   */
+  private adlClawback(ms: MarketState, mark: bigint, rest0: bigint, evts: EngineEvent[], ts: number): bigint {
+    let rest = rest0;
+    if (!this.adlEnabled || rest <= 0n) return rest;
+    const m = ms.config;
+    const winners = this.positions
+      .ofMarket(m.id)
+      .map((pos) => ({ pos, upnl: unrealizedPnl(pos, mark) }))
+      .filter((w) => w.upnl > 0n)
+      .sort((a, b) => {
+        const sa = a.upnl * BigInt(a.pos.leverage);
+        const sb = b.upnl * BigInt(b.pos.leverage);
+        return sa < sb ? 1 : sa > sb ? -1 : 0; // highest ADL score first
+      });
+    for (const { pos, upnl } of winners) {
+      if (rest <= 0n) break;
+      const userId = pos.userId;
+      const margin = pos.margin;
+      const size = pos.size;
+      const realized = upnl; // close at mark
+      const haircut = minBig(rest, realized); // ≤ profit ⇒ payout ≥ margin
+      this.positions.remove(userId, m.id);
+      this.ledger.credit(CLEARING_ACCOUNT, m.quote, -realized); // mirror the realized PnL
+      const payout = margin + realized - haircut;
+      if (payout > 0n) this.ledger.credit(userId, m.quote, payout);
+      rest -= haircut;
+      evts.push({ kind: 'liquidation', seq: this.nextSeq(), ts, userId, marketId: m.id, size, markPrice: mark, reason: 'adl' });
+      evts.push({
+        kind: 'positionChanged',
+        seq: this.nextSeq(),
+        ts,
+        userId,
+        marketId: m.id,
+        size: 0n,
+        entryPrice: 0n,
+        leverage: pos.leverage,
+        margin: 0n,
+        realizedPnl: realized,
+      });
+      this.emitBalance(evts, ts, userId, m.quote, 'liquidation');
+      this.emitBalance(evts, ts, CLEARING_ACCOUNT, m.quote, 'liquidation');
+      for (const id of [...(this.openByUser.get(userId) ?? [])]) {
+        const o = this.orders.get(id);
+        if (o && o.status === 'open' && o.marketId === m.id) {
+          this.cancelInternal(ms, o, 'liquidation', evts, ts);
+        }
+      }
+    }
+    return rest;
   }
 
   // ----------------------------------------------------------------- funding

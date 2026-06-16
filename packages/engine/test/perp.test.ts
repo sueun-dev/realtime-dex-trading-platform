@@ -451,3 +451,104 @@ describe('tiered maintenance margin (real-venue margin tiers)', () => {
     );
   });
 });
+
+describe('ADL — auto-deleveraging bad-debt waterfall (opt-in)', () => {
+  const M2 = PERP.id;
+  let TS2 = 500_000;
+  function adlSetup(): { ex: Exchange; t: ConservationTracker } {
+    const ex = new Exchange({ markets: [PERP], adl: true });
+    const t = new ConservationTracker();
+    for (const user of ['alice', 'bob', 'carol']) {
+      ex.deposit(user, 'USDC', u(100_000), TS2++);
+      t.deposit('USDC', u(100_000));
+      ex.setLeverage(user, M2, 10, TS2++);
+    }
+    return { ex, t };
+  }
+  function openPair2(ex: Exchange, price: bigint, qty: bigint, longUser: string, shortUser: string): void {
+    ex.submitOrder(shortUser, req(M2, 'sell', 'limit', price, qty), TS2++);
+    const e = ex.submitOrder(longUser, req(M2, 'buy', 'limit', price, qty), TS2++);
+    if (trades(e).length === 0) throw new Error('openPair2 did not fill');
+  }
+  const usdcOf = (ex: Exchange, u2: string): bigint =>
+    ex.getBalances(u2).find((b) => b.asset === 'USDC')?.available ?? 0n;
+
+  it('socializes bad debt onto the profitable counterparty; clearing stays whole; conservation exact', () => {
+    const { ex, t } = adlSetup();
+    // alice long 1 @100 (margin 10), bob short 1 @100 (margin 10, the winner)
+    openPair2(ex, u(100), u(1), 'alice', 'bob');
+    const bobBefore = usdcOf(ex, 'bob');
+    const clearingBefore = usdcOf(ex, CLEARING_ACCOUNT);
+    // crash to 80: alice uPnL -20 (pot = 10-20 = -10 bad debt); bob uPnL +20 (winner)
+    const evts = ex.setMarkPrice(M2, u(80), TS2++);
+    // alice liquidated for maintenance; bob auto-deleveraged to fund the deficit
+    const reasons = evts.filter((e) => e.kind === 'liquidation').map((e) => (e.kind === 'liquidation' ? e.reason : ''));
+    expect(reasons).toContain('maintenance');
+    expect(reasons).toContain('adl');
+    // both positions closed
+    expect(ex.getPosition('alice', M2)).toBeUndefined();
+    expect(ex.getPosition('bob', M2)).toBeUndefined();
+    // alice forfeited her margin (payout 0)
+    // bob realized +20 profit but was HAIRCUT by the 10 deficit (insurance had
+    // only the fees), so bob nets margin 10 + 20 - haircut. bob never below margin.
+    const bobAfter = usdcOf(ex, 'bob');
+    expect(bobAfter).toBeGreaterThanOrEqual(bobBefore + u(10)); // got >= margin back
+    // clearing did not absorb bad debt (ADL covered it) — unchanged from before
+    expect(usdcOf(ex, CLEARING_ACCOUNT)).toBe(clearingBefore);
+    // no real user is ever negative; conservation exact
+    for (const usr of ['alice', 'bob', 'carol']) expect(usdcOf(ex, usr) >= 0n).toBe(true);
+    t.check(ex);
+  });
+
+  it('ADL haircut never pushes the deleveraged winner below its own margin', () => {
+    const { ex, t } = adlSetup();
+    openPair2(ex, u(100), u(1), 'alice', 'bob');
+    ex.setMarkPrice(M2, u(80), TS2++);
+    // bob (winner) closed: profit was 20, deficit <= 10, so bob keeps margin + (>=10)
+    expect(usdcOf(ex, 'bob') >= u(100_000)).toBe(true); // started 100k, came out ahead
+    t.check(ex);
+  });
+
+  it('with ADL disabled (default), the house clearing absorbs bad debt instead', () => {
+    const ex = new Exchange({ markets: [PERP] }); // adl off
+    const t = new ConservationTracker();
+    for (const usr of ['alice', 'bob']) {
+      ex.deposit(usr, 'USDC', u(100_000), TS2++);
+      t.deposit('USDC', u(100_000));
+      ex.setLeverage(usr, M2, 10, TS2++);
+    }
+    ex.submitOrder('bob', req(M2, 'sell', 'limit', u(100), u(1)), TS2++);
+    ex.submitOrder('alice', req(M2, 'buy', 'limit', u(100), u(1)), TS2++);
+    const evts = ex.setMarkPrice(M2, u(80), TS2++);
+    // only a maintenance liquidation — bob (winner) is NOT auto-deleveraged
+    expect(evts.filter((e) => e.kind === 'liquidation').map((e) => (e.kind === 'liquidation' ? e.reason : ''))).toEqual(['maintenance']);
+    expect(ex.getPosition('bob', M2)).toBeDefined(); // winner keeps the position (no ADL)
+    t.check(ex);
+  });
+
+  it('property: through ADL liquidations, no real user is ever negative and conservation holds', () => {
+    fc.assert(
+      fc.property(fc.array(fc.integer({ min: 60, max: 140 }), { minLength: 2, maxLength: 12 }), (marks) => {
+        const ex = new Exchange({ markets: [PERP], adl: true });
+        const t = new ConservationTracker();
+        const users = ['u0', 'u1', 'u2', 'u3'];
+        let ts = 700_000;
+        for (const usr of users) {
+          ex.deposit(usr, 'USDC', u(50_000), ts++);
+          t.deposit('USDC', u(50_000));
+          ex.setLeverage(usr, M2, 10, ts++);
+        }
+        // build offsetting positions
+        ex.submitOrder('u1', req(M2, 'sell', 'limit', u(100), u(2)), ts++);
+        ex.submitOrder('u0', req(M2, 'buy', 'limit', u(100), u(2)), ts++);
+        ex.submitOrder('u3', req(M2, 'sell', 'limit', u(100), u(1)), ts++);
+        ex.submitOrder('u2', req(M2, 'buy', 'limit', u(100), u(1)), ts++);
+        for (const mk of marks) {
+          ex.setMarkPrice(M2, u(mk), ts++);
+          t.check(ex); // conservation + per-user non-negativity (CLEARING exempt) after every mark
+        }
+      }),
+      { numRuns: 80 },
+    );
+  });
+});

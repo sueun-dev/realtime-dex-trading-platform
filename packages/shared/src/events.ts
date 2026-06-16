@@ -87,6 +87,8 @@ export interface LiquidationEvent extends BaseEvent {
   /** position size that was force-closed (signed) */
   size: bigint;
   markPrice: bigint;
+  /** 'maintenance' = margin breach; 'adl' = auto-deleveraged to cover bad debt */
+  reason: 'maintenance' | 'adl';
 }
 
 export interface FundingAppliedEvent extends BaseEvent {

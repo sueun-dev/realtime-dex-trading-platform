@@ -250,7 +250,7 @@ function genStream(rng: () => number, n: number): GenResult {
     if (userId === undefined || pos === undefined) throw new Error('unreachable');
     const markPrice = (randBig(rng, 99_999n) + 1n) * SCALE;
     const hl = next();
-    events.push({ kind: 'liquidation', ...hl, userId, marketId: PERP, size: pos.size, markPrice });
+    events.push({ kind: 'liquidation', ...hl, userId, marketId: PERP, size: pos.size, markPrice, reason: 'maintenance' });
     positions.delete(key);
     const hp = next();
     events.push(

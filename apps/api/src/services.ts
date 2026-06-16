@@ -121,7 +121,9 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
   const markets = [...byId.values()];
   await repos.markets.upsertAll(markets);
 
-  const engine = new Exchange({ markets });
+  // ADL on in production: bad debt is socialized onto profitable counterparties
+  // (auto-deleverage) before the house clearing account absorbs any remainder
+  const engine = new Exchange({ markets, adl: true });
   const restored = await repos.loadRestoreState();
   engine.restoreState(restored);
   if (restored.lastSeq > 0) {

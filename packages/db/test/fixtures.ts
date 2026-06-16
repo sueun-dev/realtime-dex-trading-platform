@@ -521,6 +521,7 @@ export function buildStream(): EngineEvent[] {
     const hl = next();
     events.push({
       kind: 'liquidation',
+      reason: 'maintenance',
       ...hl,
       userId: BOB,
       marketId: PERP,
