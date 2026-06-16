@@ -37,11 +37,17 @@ test('loads the real Korean coin universe quoted in USDC', async () => {
   const ethRow = page.getByTestId('market-row').filter({ hasText: 'ETH/USDC' });
   await expect(ethRow).toBeVisible();
   await expect(ethRow).toContainText('이더리움');
-  // korean-name search narrows 263 markets down to the ethereum family
+  // korean-name search narrows the universe down to the ethereum family
   expect(await page.getByTestId('market-row').count()).toBeLessThan(6);
-  // and there are hundreds of real markets without a filter
+  // and there are hundreds of real markets without a filter. The list is
+  // virtualized (only visible rows mount), so prove the full universe via the
+  // virtual scroller's total content height (191 spot + 30 perp × ~46px).
   await selector.getByPlaceholder(/코인 검색/).fill('');
-  expect(await page.getByTestId('market-row').count()).toBeGreaterThan(100);
+  const totalHeight = await selector
+    .locator('.market-list > div')
+    .first()
+    .evaluate((el) => el.getBoundingClientRect().height);
+  expect(totalHeight).toBeGreaterThan(3000);
   await selector.getByRole('button', { name: '닫기' }).click();
   await expect(selector).not.toBeVisible();
 });

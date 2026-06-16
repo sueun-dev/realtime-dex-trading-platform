@@ -72,9 +72,11 @@ describe('live universe boot (real Upbit + Hyperliquid data)', () => {
       expect(l <= o && l <= cl).toBe(true);
       expect(l > 0n).toBe(true);
     }
-    // recent live data (not a stale fixture). The Upbit USDT-BTC book trades
-    // less often than KRW-BTC, so minute buckets can have gaps — allow 2h.
-    expect(Date.now() - candles.at(-1)!.t).toBeLessThan(2 * 60 * 60_000);
+    // proves this is genuinely live data, not a stale committed fixture (which
+    // would be days/months old). The Upbit USDT-BTC book is thin and can go
+    // hours without a trade (no candle in quiet periods), so allow a 24h window
+    // — still orders of magnitude tighter than any fixture's age.
+    expect(Date.now() - candles.at(-1)!.t).toBeLessThan(24 * 60 * 60_000);
   }, 30_000);
 
   it('serves real BTC-PERP candles (Hyperliquid)', async () => {

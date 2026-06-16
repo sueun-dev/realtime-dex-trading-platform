@@ -13,7 +13,7 @@ export default defineConfig({
   workers: 1, // one trading session at a time — tests share the exchange state
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:5180',
     viewport: { width: 1600, height: 900 },
     locale: 'ko-KR',
     trace: 'retain-on-failure',
@@ -31,7 +31,7 @@ export default defineConfig({
     {
       command: 'pnpm --filter @dex/web dev',
       cwd: '..',
-      url: 'http://localhost:5173',
+      url: 'http://localhost:5180',
       timeout: 60_000,
       reuseExistingServer: true,
       stdout: 'ignore',

@@ -1,10 +1,81 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import type { Market } from '../lib/api.js';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import type { Market, TickerData } from '../lib/api.js';
 import { formatPct, formatPrice } from '../lib/format.js';
 import { useMarketStore } from '../stores/market.js';
 
 type FilterTab = 'all' | 'spot' | 'perp';
+
+const ROW_PX = 46;
+/** below this, plain render (cheap, and keeps jsdom tests measurable) */
+const VIRTUALIZE_OVER = 40;
+
+function MarketRow({
+  m,
+  ticker,
+  onSelect,
+  style,
+}: {
+  m: Market;
+  ticker: TickerData | undefined;
+  onSelect: (id: string) => void;
+  style?: React.CSSProperties;
+}) {
+  const cls = ticker === undefined ? '' : ticker.change24h > 0n ? 'pos' : ticker.change24h < 0n ? 'neg' : '';
+  return (
+    <button type="button" className="market-row" data-testid="market-row" style={style} onClick={() => onSelect(m.id)}>
+      <span className="market-row-symbol">
+        {m.base}/{m.quote}
+        <span className={`badge mini ${m.type === 'perp' ? 'perp' : 'spot'}`}>
+          {m.type === 'perp' ? 'PERP' : 'USDC'}
+        </span>
+      </span>
+      <span className="dim market-row-name">{m.koreanName ?? m.englishName ?? ''}</span>
+      <span className="market-row-price">
+        {ticker !== undefined ? formatPrice(ticker.price, m.tickSize) : '–'}
+      </span>
+      <span className={`market-row-change ${cls}`}>{ticker !== undefined ? formatPct(ticker.change24h) : ''}</span>
+    </button>
+  );
+}
+
+/** Virtualized list for the full 191+ market universe (only visible rows mount). */
+function VirtualMarketList({
+  rows,
+  tickers,
+  onSelect,
+}: {
+  rows: Market[];
+  tickers: Record<string, TickerData>;
+  onSelect: (id: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_PX,
+    overscan: 8,
+  });
+  return (
+    <div className="market-list" ref={scrollRef}>
+      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {virtualizer.getVirtualItems().map((vi) => {
+          const m = rows[vi.index]!;
+          return (
+            <MarketRow
+              key={m.id}
+              m={m}
+              ticker={tickers[m.id]}
+              onSelect={onSelect}
+              style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 const TABS: { key: FilterTab; label: string }[] = [
   { key: 'all', label: '전체' },
@@ -117,40 +188,19 @@ export function MarketSelector() {
             </button>
           ))}
         </div>
-        <div className="market-list">
-          {filtered.length === 0 ? (
+        {filtered.length === 0 ? (
+          <div className="market-list">
             <div className="empty dim">검색 결과가 없습니다</div>
-          ) : (
-            filtered.map((m) => {
-              const ticker = tickers[m.id];
-              const cls =
-                ticker === undefined ? '' : ticker.change24h > 0n ? 'pos' : ticker.change24h < 0n ? 'neg' : '';
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  className="market-row"
-                  data-testid="market-row"
-                  onClick={() => selectMarket(m.id)}
-                >
-                  <span className="market-row-symbol">
-                    {m.base}/{m.quote}
-                    <span className={`badge mini ${m.type === 'perp' ? 'perp' : 'spot'}`}>
-                      {m.type === 'perp' ? 'PERP' : 'USDC'}
-                    </span>
-                  </span>
-                  <span className="dim market-row-name">{m.koreanName ?? m.englishName ?? ''}</span>
-                  <span className="market-row-price">
-                    {ticker !== undefined ? formatPrice(ticker.price, m.tickSize) : '–'}
-                  </span>
-                  <span className={`market-row-change ${cls}`}>
-                    {ticker !== undefined ? formatPct(ticker.change24h) : ''}
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
+          </div>
+        ) : filtered.length > VIRTUALIZE_OVER ? (
+          <VirtualMarketList rows={filtered} tickers={tickers} onSelect={selectMarket} />
+        ) : (
+          <div className="market-list">
+            {filtered.map((m) => (
+              <MarketRow key={m.id} m={m} ticker={tickers[m.id]} onSelect={selectMarket} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
