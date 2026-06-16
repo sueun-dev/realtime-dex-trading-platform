@@ -33,4 +33,13 @@ export {
 } from './universe.js';
 export { PriceCache } from './priceCache.js';
 export { CandleService, INTERVAL_MS, type CandleServiceOptions } from './candles.js';
+export {
+  PriceOracle,
+  fetchOkxSwapMids,
+  fetchCoinbaseSpot,
+  OKX_REST_URL,
+  COINBASE_REST_URL,
+  type OracleSource,
+  type OracleOptions,
+} from './oracle.js';
 export { numToUnits } from './util.js';

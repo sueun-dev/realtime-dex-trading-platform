@@ -75,20 +75,24 @@ export interface FetchJsonOptions {
    * values beyond 2^53 keep full precision (read back via `expectBigIntId`).
    */
   bigIntFields?: string[];
+  /** extra request headers (e.g. a User-Agent some venues require) */
+  headers?: Record<string, string>;
 }
 
 /** fetch + JSON with abort timeout and descriptive errors on non-200 / bad JSON. */
 export async function fetchJson(url: string, opts: FetchJsonOptions = {}): Promise<unknown> {
-  const { method = 'GET', body, timeoutMs = 10_000 } = opts;
+  const { method = 'GET', body, timeoutMs = 10_000, headers } = opts;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(new Error(`request timed out after ${timeoutMs}ms`)), timeoutMs);
   let res: Response;
   try {
     const init: RequestInit = { method, signal: ctrl.signal };
+    const hdrs: Record<string, string> = { ...headers };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
-      init.headers = { 'Content-Type': 'application/json' };
+      hdrs['Content-Type'] = 'application/json';
     }
+    if (Object.keys(hdrs).length > 0) init.headers = hdrs;
     res = await fetch(url, init);
   } catch (err) {
     throw new Error(`${method} ${url} network failure: ${(err as Error).message}`, { cause: err });

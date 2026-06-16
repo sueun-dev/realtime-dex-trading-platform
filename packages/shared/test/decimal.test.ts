@@ -5,9 +5,11 @@ import {
   SCALE,
   divRound,
   divUnits,
+  emaStep,
   feeOn,
   fromUnits,
   isMultipleOf,
+  medianBig,
   mulUnits,
   roundToLot,
   roundToTick,
@@ -132,5 +134,63 @@ describe('tick/lot', () => {
   });
   it('DECIMALS consistency', () => {
     expect(10n ** BigInt(DECIMALS)).toBe(SCALE);
+  });
+});
+
+describe('medianBig — manipulation-resistant mark aggregation', () => {
+  it('odd count returns the middle, even count the floor-average', () => {
+    expect(medianBig([toUnits('3'), toUnits('1'), toUnits('2')])).toBe(toUnits('2'));
+    expect(medianBig([toUnits('1'), toUnits('2'), toUnits('3'), toUnits('4')])).toBe(toUnits('2.5'));
+    expect(medianBig([toUnits('65832.7')])).toBe(toUnits('65832.7'));
+  });
+  it('a single manipulated source cannot move the median of >=3 real sources', () => {
+    const real = [toUnits('65832'), toUnits('65806'), toUnits('65820')];
+    const honest = medianBig(real);
+    // one source spikes 10x — median is unmoved (still a real middle price)
+    const attacked = medianBig([...real, toUnits('658320')]);
+    expect(honest).toBe(toUnits('65820'));
+    // with the 4th (even count) it shifts only to the floor-avg of the two middles,
+    // never to the manipulated value
+    expect(attacked).toBe(divRound(toUnits('65820') + toUnits('65832'), 2n, 'floor'));
+    expect(attacked < toUnits('65840')).toBe(true);
+  });
+  it('throws on an empty list (a mark needs >=1 real source)', () => {
+    expect(() => medianBig([])).toThrow(RangeError);
+  });
+  it('property: median lies within [min,max] and equals the sorted middle', () => {
+    fc.assert(
+      fc.property(fc.array(fc.bigInt({ min: 1n, max: 10n ** 14n }), { minLength: 1, maxLength: 9 }), (xs) => {
+        const m = medianBig(xs);
+        const sorted = [...xs].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        expect(m >= sorted[0]!).toBe(true);
+        expect(m <= sorted[sorted.length - 1]!).toBe(true);
+        if (xs.length % 2 === 1) expect(m).toBe(sorted[xs.length >> 1]!);
+      }),
+    );
+  });
+});
+
+describe('emaStep', () => {
+  it('seeds with the first sample, then converges toward new values', () => {
+    expect(emaStep(null, toUnits('100'), toUnits('0.2'))).toBe(toUnits('100'));
+    // prev=100, next=110, α=0.2 → 100 + 0.2*10 = 102
+    expect(emaStep(toUnits('100'), toUnits('110'), toUnits('0.2'))).toBe(toUnits('102'));
+    // α=1 → tracks next exactly
+    expect(emaStep(toUnits('100'), toUnits('110'), toUnits('1'))).toBe(toUnits('110'));
+  });
+  it('property: EMA stays between prev and next (never overshoots) for 0<α<=1', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 10n ** 14n }),
+        fc.bigInt({ min: 1n, max: 10n ** 14n }),
+        fc.bigInt({ min: 1n, max: SCALE }),
+        (prev, next, alpha) => {
+          const out = emaStep(prev, next, alpha);
+          const lo = prev < next ? prev : next;
+          const hi = prev < next ? next : prev;
+          expect(out >= lo && out <= hi).toBe(true);
+        },
+      ),
+    );
   });
 });

@@ -7,6 +7,7 @@
  */
 import {
   HyperliquidWs,
+  PriceOracle,
   UpbitWs,
   INTERVAL_MS,
   spotMarketIdForUpbitCode,
@@ -14,12 +15,26 @@ import {
   type HlTrade,
   type PublicTrade,
 } from '@dex/market-data';
-import { divUnits, maxBig, minBig, type MarketConfig, type Ticker } from '@dex/shared';
+import { divUnits, emaStep, maxBig, medianBig, minBig, toUnits, type MarketConfig, type Ticker } from '@dex/shared';
 import { fetchTickersChunked, type Services, type Stoppable } from './services.js';
 
 const MARK_THROTTLE_MS = 1000;
 const STATS_REFRESH_MS = 5 * 60_000;
 const SPOT_POLL_MS = 30_000;
+/** how often to refresh the external oracle sources (OKX/Coinbase) */
+const ORACLE_POLL_MS = 5_000;
+/** EMA smoothing applied to the median-of-real-sources mark (damps spikes) */
+const MARK_EMA_ALPHA = toUnits('0.3');
+/**
+ * Perp bases that get a manipulation-resistant multi-source mark (HL mid + OKX
+ * swap + Coinbase spot → median + EMA). Long-tail HL-only perps keep the HL
+ * venue mark. Kept to liquid majors so the Coinbase poll stays well under rate
+ * limits and the median always has ≥2 independent real sources.
+ */
+const ORACLE_MAJORS = new Set([
+  'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'AVAX', 'LINK', 'LTC', 'BCH', 'ADA',
+  'DOT', 'MATIC', 'APT', 'ARB', 'OP', 'SUI', 'TIA', 'SEI', 'INJ', 'NEAR',
+]);
 
 interface PerpStats {
   prevClose: bigint;
@@ -38,6 +53,11 @@ export function startFeeds(svc: Services): Stoppable {
   const perpByCoin = new Map(perps.map((m) => [m.base, m]));
   const stats = new Map<string, PerpStats>();
   const lastMark = new Map<string, { price: bigint; at: number }>();
+  const markEma = new Map<string, bigint>(); // per-market EMA state for the robust mark
+
+  // multi-source oracle: real OKX swap + Coinbase spot for the liquid majors
+  const oracle = new PriceOracle();
+  const oracleCoins = [...new Set(perps.map((m) => m.base).filter((b) => ORACLE_MAJORS.has(b)))];
 
   // ---- spot: Upbit websocket (tickers + REAL market prints) -------------------
   const upbitWs = new UpbitWs(spotUpbitCodes);
@@ -85,27 +105,43 @@ export function startFeeds(svc: Services): Stoppable {
   });
   hlWs.connect();
 
-  /** Push a real HL mid into the ticker (only with real 24h stats) + the mark. */
-  function applyPerpMid(m: MarketConfig, mid: bigint, now: number): void {
+  /**
+   * Robust mark for a perp: median of all independent REAL sources (the HL mid
+   * we mirror + fresh OKX/Coinbase prices), smoothed by an EMA. A single
+   * manipulated source cannot move a ≥3-source median; the EMA damps transient
+   * spikes. Long-tail coins with no external source fall back to the HL mid
+   * (the actual venue) — never a fabricated value.
+   */
+  function robustMark(m: MarketConfig, hlMid: bigint): bigint {
+    const sources = [hlMid, ...oracle.externalPrices(m.base)];
+    const med = medianBig(sources);
+    const mark = emaStep(markEma.get(m.id) ?? null, med, MARK_EMA_ALPHA);
+    markEma.set(m.id, mark);
+    return mark;
+  }
+
+  /** Push a real HL mid into the ticker (only with real 24h stats) + the robust mark. */
+  function applyPerpMid(m: MarketConfig, hlMid: bigint, now: number): void {
+    const mark = robustMark(m, hlMid);
     const st = stats.get(m.id);
     // Do NOT publish fabricated 24h stats (0 / mid placeholders) before the
     // first real candle refresh — emit the ticker only once real stats exist.
     if (st !== undefined) {
       priceCache.setTicker({
         marketId: m.id,
-        price: mid,
-        change24h: st.prevClose > 0n ? divUnits(mid - st.prevClose, st.prevClose) : 0n,
-        high24h: maxBig(st.high, mid),
-        low24h: minBig(st.low, mid),
+        price: mark,
+        change24h: st.prevClose > 0n ? divUnits(mark - st.prevClose, st.prevClose) : 0n,
+        high24h: maxBig(st.high, mark),
+        low24h: minBig(st.low, mark),
         volume24h: st.volume,
         ts: now,
       });
     }
     const last = lastMark.get(m.id);
-    if (!last || (now - last.at >= MARK_THROTTLE_MS && mid !== last.price)) {
-      lastMark.set(m.id, { price: mid, at: now });
+    if (!last || (now - last.at >= MARK_THROTTLE_MS && mark !== last.price)) {
+      lastMark.set(m.id, { price: mark, at: now });
       void pipeline
-        .exec(() => engine.setMarkPrice(m.id, mid, Date.now()))
+        .exec(() => engine.setMarkPrice(m.id, mark, Date.now()))
         .catch((e: unknown) => log(`mark price ${m.id} failed: ${String(e)}`));
     }
   }
@@ -177,6 +213,17 @@ export function startFeeds(svc: Services): Stoppable {
   }, SPOT_POLL_MS);
   perpPollTimer.unref?.();
 
+  // ---- multi-source oracle poll: refresh real OKX/Coinbase prices for majors --
+  let oracleTimer: ReturnType<typeof setInterval> | null = null;
+  if (oracleCoins.length > 0) {
+    const pollOracle = (): void => {
+      void oracle.refresh(oracleCoins).catch((e: unknown) => log(`oracle refresh failed: ${String(e)}`));
+    };
+    pollOracle(); // prime immediately so the first marks are already multi-source
+    oracleTimer = setInterval(pollOracle, ORACLE_POLL_MS);
+    oracleTimer.unref?.();
+  }
+
   return {
     stop() {
       stopped = true;
@@ -185,6 +232,7 @@ export function startFeeds(svc: Services): Stoppable {
       if (statsTimer !== null) clearTimeout(statsTimer);
       clearInterval(pollTimer);
       clearInterval(perpPollTimer);
+      if (oracleTimer !== null) clearInterval(oracleTimer);
     },
   };
 }

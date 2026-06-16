@@ -116,3 +116,27 @@ export function maxBig(a: bigint, b: bigint): bigint {
 export function signBig(v: bigint): -1n | 0n | 1n {
   return v < 0n ? -1n : v > 0n ? 1n : 0n;
 }
+
+/**
+ * Median of a non-empty list of bigints. Odd count → the middle value; even
+ * count → the floor-average of the two middle values. Manipulation-resistant
+ * by construction: a single outlier source cannot move the result when there
+ * are ≥3 inputs. Throws on an empty list (a mark price needs ≥1 real source).
+ */
+export function medianBig(values: readonly bigint[]): bigint {
+  if (values.length === 0) throw new RangeError('median of empty list');
+  const sorted = [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const mid = sorted.length >> 1;
+  if (sorted.length % 2 === 1) return sorted[mid]!;
+  return divRound(sorted[mid - 1]! + sorted[mid]!, 2n, 'floor');
+}
+
+/**
+ * Exponential moving average step in 1e8 fixed-point: `prev + α·(next − prev)`,
+ * with α given as 1e8-scaled (e.g. 0.2 → 20_000_000n). Used to damp transient
+ * mark-price spikes. `prev == null` seeds with `next`.
+ */
+export function emaStep(prev: bigint | null, next: bigint, alpha: bigint): bigint {
+  if (prev === null) return next;
+  return prev + mulUnits(next - prev, alpha);
+}
