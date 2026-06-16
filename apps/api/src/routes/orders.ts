@@ -59,6 +59,7 @@ export function registerOrderRoutes(
   app: FastifyInstance,
   svc: Services,
   authenticate: preHandlerAsyncHookHandler,
+  metrics?: import('../metrics.js').Metrics,
 ): void {
   const { engine, repos, pipeline } = svc;
 
@@ -75,6 +76,7 @@ export function registerOrderRoutes(
     });
     const rejected = outcome.find((e) => e.kind === 'orderRejected');
     if (rejected) {
+      metrics?.ordersRejected.inc({ code: rejected.code });
       // idempotent retry: a duplicate clientOrderId returns the EXISTING live
       // order (200) instead of an error, so a client that retries after a
       // network timeout can't accidentally double-submit
@@ -91,6 +93,8 @@ export function registerOrderRoutes(
     }
     const accepted = outcome.find((e) => e.kind === 'orderAccepted');
     if (!accepted) throw new DexError('INTERNAL', 'no acceptance event');
+    metrics?.ordersAccepted.inc({ market: request.marketId, type: request.type });
+    metrics?.tradesExecuted.inc(outcome.filter((e) => e.kind === 'trade').length);
     // engine may have already evicted a fully-filled/cancelled order — prefer
     // the live order, else reconstruct the terminal state from the events
     const live = engine.getOrder(accepted.order.id);

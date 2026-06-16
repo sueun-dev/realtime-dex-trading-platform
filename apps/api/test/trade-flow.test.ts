@@ -50,15 +50,25 @@ describe('health, readiness & metrics', () => {
     expect((ready.json() as { ready: boolean }).ready).toBe(false);
   });
 
-  it('exposes Prometheus-style metrics from real signals', async () => {
+  it('exposes real Prometheus metrics (prom-client: process + exchange gauges)', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/api/metrics' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('text/plain');
     const body = res.body;
-    expect(body).toContain('dex_engine_seq ');
-    expect(body).toContain('dex_orders_live ');
-    expect(body).toContain('dex_ws_connections ');
-    expect(body).toMatch(/dex_markets_total \d+/);
+    // prom-client default process metrics
+    expect(body).toContain('process_cpu_user_seconds_total');
+    expect(body).toContain('nodejs_heap_size_used_bytes');
+    // custom exchange gauges (labelled with app="dex-exchange")
+    expect(body).toMatch(/dex_engine_seq\{[^}]*\} \d+/);
+    expect(body).toMatch(/dex_orders_live\{[^}]*\} \d+/);
+    expect(body).toMatch(/dex_ws_connections\{[^}]*\} \d+/);
+    expect(body).toMatch(/dex_markets_total\{[^}]*\} \d+/);
+  });
+
+  it('serves generated OpenAPI docs + spec', async () => {
+    const spec = await t.app.inject({ method: 'GET', url: '/api/docs/json' });
+    expect(spec.statusCode).toBe(200);
+    expect((spec.json() as { openapi?: string }).openapi).toMatch(/^3\./);
   });
 });
 

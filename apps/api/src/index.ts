@@ -25,6 +25,8 @@ async function main(): Promise<void> {
     },
     // generous enough for an active trader, hostile to scrapers/bots
     rateLimit: { max: 600, windowSec: 60, authMax: 30 },
+    // structured request logging via fastify's built-in pino
+    logger: { level: process.env.DEX_LOG_LEVEL ?? 'info' },
   });
   const app = await buildApp(services);
   await app.listen({ port: PORT, host: HOST });

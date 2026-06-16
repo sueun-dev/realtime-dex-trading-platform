@@ -2,10 +2,15 @@ import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import rateLimit from '@fastify/rate-limit';
+import helmet from '@fastify/helmet';
+import underPressure from '@fastify/under-pressure';
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
 import { ZodError } from 'zod';
 import { DexError, ErrorCodes, type ErrorCode } from '@dex/shared';
 import type { Services } from './services.js';
 import type { HubSocket } from './wsHub.js';
+import { createMetrics } from './metrics.js';
 import { registerMarketRoutes } from './routes/markets.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerAccountRoutes } from './routes/account.js';
@@ -36,9 +41,36 @@ export async function buildApp(svc: Services): Promise<FastifyInstance> {
   // scope to the real client behind a reverse proxy/LB (otherwise every client
   // collapses to the proxy's IP → one shared bucket → global self-DoS). Set it
   // to the trusted proxy CIDR/hop-count in production; default off (direct).
-  const app = fastify({ logger: false, trustProxy: svc.trustProxy ?? false });
+  const app = fastify({ logger: svc.logger ?? false, trustProxy: svc.trustProxy ?? false });
+
+  // security headers (CSP relaxed so the bundled Swagger UI can load its assets)
+  await app.register(helmet, { contentSecurityPolicy: false, global: true });
   await app.register(cors, { origin: true });
   await app.register(websocket);
+
+  // load shedding: shed (503) when the event loop / heap is saturated, and back
+  // the readiness probe with the same liveness signal
+  await app.register(underPressure, {
+    maxEventLoopDelay: 1000,
+    maxHeapUsedBytes: 1_500_000_000,
+    retryAfter: 1,
+    exposeStatusRoute: { url: '/api/pressure', routeOpts: {} },
+  });
+
+  // real Prometheus metrics (default process/GC/heap + live exchange gauges)
+  const metrics = createMetrics(svc);
+  app.get('/api/metrics', async (_req, reply) => {
+    reply.type(metrics.registry.contentType);
+    return metrics.registry.metrics();
+  });
+
+  // OpenAPI 3 spec generated from the registered routes, served at /api/docs
+  await app.register(swagger, {
+    openapi: {
+      info: { title: 'DEX Exchange API', version: '1.0.0', description: 'USDC-settled DEX over real Upbit/Hyperliquid market data' },
+    },
+  });
+  await app.register(swaggerUi, { routePrefix: '/api/docs' });
 
   if (svc.rateLimit !== false) {
     await app.register(rateLimit, {
@@ -87,7 +119,7 @@ export async function buildApp(svc: Services): Promise<FastifyInstance> {
   registerMarketRoutes(app, svc);
   registerAuthRoutes(app, svc, svc.rateLimit === false ? undefined : svc.rateLimit.authMax);
   registerAccountRoutes(app, svc, authenticate);
-  registerOrderRoutes(app, svc, authenticate);
+  registerOrderRoutes(app, svc, authenticate, metrics);
 
   return app;
 }

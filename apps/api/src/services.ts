@@ -42,6 +42,8 @@ export interface ServiceOptions {
   rateLimit?: RateLimitConfig | false;
   /** Fastify trustProxy (CIDR/hop-count/boolean) so req.ip is the real client behind a proxy */
   trustProxy?: boolean | string | string[] | number;
+  /** Fastify logger option (pino config or boolean); default false (quiet, e.g. tests) */
+  logger?: import('fastify').FastifyServerOptions['logger'];
   log?: (msg: string) => void;
 }
 
@@ -67,6 +69,7 @@ export interface Services {
   hl: HyperliquidRest;
   rateLimit: RateLimitConfig | false;
   trustProxy: boolean | string | string[] | number;
+  logger: import('fastify').FastifyServerOptions['logger'];
   log: (msg: string) => void;
   stop(): Promise<void>;
 }
@@ -155,6 +158,7 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
     hl,
     rateLimit: opts.rateLimit ?? false,
     trustProxy: opts.trustProxy ?? false,
+    logger: opts.logger ?? false,
     log,
     async stop() {
       for (const s of stoppables) s.stop();
