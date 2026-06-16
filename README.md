@@ -1,9 +1,9 @@
-# hyperliquid-style-dex
+# DEX
 
-A full-stack, Hyperliquid-style crypto **DEX** built from scratch — real matching
-engine, perpetual futures + spot, USDC-settled — running on **100% real, live
-market data**. The only thing that isn't real money is the demo faucet balance
-(testnet-style), exactly like Binance/Hyperliquid testnets.
+A full-stack crypto **DEX** built from scratch — real matching engine, perpetual
+futures + spot, USDC-settled — running on **100% real, live market data**. The only
+thing that isn't real money is the demo faucet balance (testnet-style), exactly like
+a real exchange's testnet.
 
 > Spot markets mirror **Upbit's real USDT order books** (191 markets); perps use
 > **Hyperliquid's real markets** (30 markets). Prices, order-book depth (price
@@ -35,7 +35,7 @@ book **down** (rather than serving a frozen one as "live") when the source WS dr
   with an insurance fund, hourly funding (zero-sum, rounding-exact).
 - **Money conservation** — proven by property tests: assets + fees + clearing
   always equal net deposits, after *every* operation.
-- **Real-time UI** — Hyperliquid-style dark trading interface: pro candlestick
+- **Real-time UI** — professional dark trading interface: pro candlestick
   chart with indicators (MA/EMA/BOLL/VOL/MACD/RSI/KDJ via klinecharts),
   live order book + trade tape over WebSocket, order entry with leverage,
   positions/orders/fills/balances, virtualized 221-market selector.
