@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import fc from 'fast-check';
 import {
   CLEARING_ACCOUNT,
   DexError,
@@ -6,8 +7,9 @@ import {
   divRound,
   feeOn,
   mulUnits,
+  type Position,
 } from '@dex/shared';
-import { Exchange } from '../src/index.js';
+import { Exchange, maintenanceMargin, tieredMmRate } from '../src/index.js';
 import { ConservationTracker, PERP, acceptedId, newExchange, rejection, req, trades, u } from './helpers.js';
 
 const M = PERP.id;
@@ -380,5 +382,72 @@ describe('perp engine', () => {
     expect(s.marginUsed).toBe(u(100));
     const usdcRow = s.balances.find((b) => b.asset === 'USDC')!;
     expect(s.perpEquity).toBe(usdcRow.available + usdcRow.locked + u(100) + u(10));
+  });
+});
+
+describe('tiered maintenance margin (real-venue margin tiers)', () => {
+  const pos = (size: bigint): Position => ({
+    userId: 'x',
+    marketId: M,
+    size,
+    entryPrice: u(100_000),
+    leverage: 1,
+    margin: 0n,
+  });
+  const MARK = u(100_000); // $100k mark so notional = |size| × 100k
+
+  it('tieredMmRate steps up by notional bracket', () => {
+    expect(tieredMmRate(u(49_999))).toBe(0n); //          ≤ $50k → base
+    expect(tieredMmRate(u(50_000))).toBe(0n);
+    expect(tieredMmRate(u(50_001))).toBe(u('0.01')); //   $50k–250k → 1%
+    expect(tieredMmRate(u(250_000))).toBe(u('0.01'));
+    expect(tieredMmRate(u(250_001))).toBe(u('0.02')); //  $250k–1M → 2%
+    expect(tieredMmRate(u(1_000_000))).toBe(u('0.02'));
+    expect(tieredMmRate(u(1_000_001))).toBe(u('0.05')); // $1M–5M → 5%
+    expect(tieredMmRate(u(5_000_000))).toBe(u('0.05'));
+    expect(tieredMmRate(u(5_000_001))).toBe(u('0.1')); //  > $5M → 10%
+  });
+
+  it('small positions are unchanged (base = notional/(2·maxLev))', () => {
+    // size 0.1 @ $100k = $10k notional, base tier → exactly the old flat formula
+    const notional = mulUnits(MARK, u('0.1'));
+    const base = divRound(notional, 2n * BigInt(PERP.maxLeverage), 'ceil');
+    expect(maintenanceMargin(pos(u('0.1')), MARK, PERP)).toBe(base);
+  });
+
+  it('large positions require a strictly higher MM than the flat rate (liquidate earlier)', () => {
+    // size 20 @ $100k = $2M notional → 5% tier. flat (maxLev 20) = 2.5% = $50k.
+    const notional = mulUnits(MARK, u(20)); // $2,000,000
+    const flat = divRound(notional, 2n * BigInt(PERP.maxLeverage), 'ceil'); // $50,000
+    const mm = maintenanceMargin(pos(u(20)), MARK, PERP);
+    expect(mm).toBe(mulUnits(notional, u('0.05'), 'ceil')); // $100,000 (5%)
+    expect(mm > flat).toBe(true);
+  });
+
+  it('property: maintenance margin is non-decreasing in position size', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 2_000n }),
+        fc.bigInt({ min: 1n, max: 2_000n }),
+        (a, b) => {
+          const sa = a * u('0.01');
+          const sb = b * u('0.01');
+          const mmA = maintenanceMargin(pos(sa), MARK, PERP);
+          const mmB = maintenanceMargin(pos(sb), MARK, PERP);
+          if (sa <= sb) expect(mmA <= mmB).toBe(true);
+        },
+      ),
+    );
+  });
+
+  it('property: MM is always >= the flat base rate (tiers only tighten, never loosen)', () => {
+    fc.assert(
+      fc.property(fc.bigInt({ min: 1n, max: 100_000n }), (k) => {
+        const size = k * u('0.001');
+        const notional = mulUnits(MARK, size);
+        const base = divRound(notional, 2n * BigInt(PERP.maxLeverage), 'ceil');
+        expect(maintenanceMargin(pos(size), MARK, PERP) >= base).toBe(true);
+      }),
+    );
   });
 });
