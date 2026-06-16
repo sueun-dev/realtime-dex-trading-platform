@@ -1,9 +1,9 @@
-# DEX
+# Realtime DEX Trading Platform
 
-A full-stack crypto **DEX** built from scratch — real matching engine, perpetual
-futures + spot, USDC-settled — running on **100% real, live market data**. The only
-thing that isn't real money is the demo faucet balance (testnet-style), exactly like
-a real exchange's testnet.
+A full-stack, real-time crypto **DEX trading platform** built from scratch — real
+matching engine, perpetual futures + spot, USDC-settled — running on **100% real,
+live market data**. The only thing that isn't real money is the demo faucet balance
+(testnet-style), exactly like a real exchange's testnet.
 
 > Spot markets mirror **Upbit's real USDT order books** (191 markets); perps use
 > **Hyperliquid's real markets** (30 markets). Prices, order-book depth (price
