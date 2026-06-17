@@ -990,6 +990,35 @@ input[type='range']:focus {
   box-shadow: var(--glow-green);
 }
 
+.small-btn.primary {
+  color: var(--bg);
+  border-color: var(--green-bright);
+  background: var(--green-bright);
+}
+
+.small-btn.primary:hover {
+  filter: brightness(1.08);
+  color: var(--bg);
+}
+
+.order-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.inline-edit {
+  width: 84px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--field);
+  border: 1px solid var(--green-bright);
+  border-radius: 6px;
+  outline: none;
+}
+
 .balances-actions {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-soft);

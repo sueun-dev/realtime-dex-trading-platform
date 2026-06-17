@@ -428,6 +428,9 @@ export const api = {
   cancelOrder(orderId: string): Promise<unknown> {
     return apiFetch<unknown>(`/orders/${orderId}`, { method: 'DELETE' });
   },
+  amendOrder(orderId: string, changes: { price?: string; qty?: string }): Promise<unknown> {
+    return apiFetch<unknown>(`/orders/${orderId}`, { method: 'PATCH', body: changes });
+  },
   setLeverage(marketId: string, leverage: number): Promise<unknown> {
     return apiFetch<unknown>('/account/leverage', { method: 'POST', body: { marketId, leverage } });
   },

@@ -110,19 +110,41 @@ export function PositionsTable() {
   );
 }
 
+interface EditState {
+  id: string;
+  price: string;
+  qty: string;
+}
+
 export function OpenOrdersTable() {
   const orders = useUserStore((s) => s.openOrders);
   const byId = useMarketStore((s) => s.byId);
   const queryClient = useQueryClient();
+  const [edit, setEdit] = useState<EditState | null>(null);
+
+  const refresh = (): Promise<unknown> =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['orders'] }),
+      queryClient.invalidateQueries({ queryKey: ['account'] }),
+    ]);
 
   const cancel = async (orderId: string): Promise<void> => {
     try {
       await api.cancelOrder(orderId);
       toast.success('주문이 취소되었습니다');
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['orders'] }),
-        queryClient.invalidateQueries({ queryKey: ['account'] }),
-      ]);
+      await refresh();
+    } catch (e) {
+      toast.error(koMessage(e));
+    }
+  };
+
+  const submitEdit = async (): Promise<void> => {
+    if (edit === null) return;
+    try {
+      await api.amendOrder(edit.id, { price: edit.price, qty: edit.qty });
+      setEdit(null);
+      toast.success('주문이 수정되었습니다');
+      await refresh();
     } catch (e) {
       toast.error(koMessage(e));
     }
@@ -148,6 +170,9 @@ export function OpenOrdersTable() {
         {orders.map((o) => {
           const tickSize = byId[o.marketId]?.tickSize ?? 1n;
           const trigger = o.trigger;
+          const editing = edit?.id === o.id;
+          // only a plain resting limit order (no trigger) can be amended in place
+          const amendable = o.type === 'limit' && trigger === null && o.price !== null;
           return (
             <tr key={o.id}>
               <td className="dim">{formatTime(o.ts)}</td>
@@ -162,7 +187,16 @@ export function OpenOrdersTable() {
                 )}
               </td>
               <td>
-                {trigger !== null ? (
+                {editing ? (
+                  <input
+                    className="inline-edit"
+                    aria-label="주문 가격 수정"
+                    value={edit.price}
+                    onChange={(e) => {
+                      setEdit({ ...edit, price: e.target.value });
+                    }}
+                  />
+                ) : trigger !== null ? (
                   <span className="trigger-cond" data-testid={`trigger-cond-${o.id}`}>
                     {trigger.direction === 'above' ? '≥' : '≤'} {formatPrice(trigger.price, tickSize)}
                   </span>
@@ -172,18 +206,68 @@ export function OpenOrdersTable() {
                   '시장가'
                 )}
               </td>
-              <td>{formatQty(o.qty)}</td>
-              <td>{formatQty(o.filledQty)}</td>
               <td>
-                <button
-                  type="button"
-                  className="small-btn"
-                  onClick={() => {
-                    void cancel(o.id);
-                  }}
-                >
-                  취소
-                </button>
+                {editing ? (
+                  <input
+                    className="inline-edit"
+                    aria-label="주문 수량 수정"
+                    value={edit.qty}
+                    onChange={(e) => {
+                      setEdit({ ...edit, qty: e.target.value });
+                    }}
+                  />
+                ) : (
+                  formatQty(o.qty)
+                )}
+              </td>
+              <td>{formatQty(o.filledQty)}</td>
+              <td className="order-actions">
+                {editing ? (
+                  <>
+                    <button
+                      type="button"
+                      className="small-btn primary"
+                      onClick={() => {
+                        void submitEdit();
+                      }}
+                    >
+                      확인
+                    </button>
+                    <button
+                      type="button"
+                      className="small-btn"
+                      onClick={() => {
+                        setEdit(null);
+                      }}
+                    >
+                      되돌리기
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {amendable && (
+                      <button
+                        type="button"
+                        className="small-btn"
+                        data-testid={`amend-${o.id}`}
+                        onClick={() => {
+                          setEdit({ id: o.id, price: fromUnits(o.price as bigint), qty: fromUnits(o.qty) });
+                        }}
+                      >
+                        수정
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="small-btn"
+                      onClick={() => {
+                        void cancel(o.id);
+                      }}
+                    >
+                      취소
+                    </button>
+                  </>
+                )}
               </td>
             </tr>
           );

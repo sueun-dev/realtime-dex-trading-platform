@@ -134,6 +134,36 @@ test('limit order rests in open orders and cancels', async () => {
   await expect(page.locator('.data-table tbody tr').filter({ hasText: '30,000' })).toHaveCount(0);
 });
 
+test('amends a resting limit order in place (cancel-replace) and re-rests', async () => {
+  const form = page.getByTestId('order-form');
+  await form.getByRole('button', { name: '지정가' }).click();
+  await form.getByPlaceholder('가격').fill('31000'); // far below market — rests
+  await form.getByPlaceholder('수량').fill('0.001');
+  await form.getByRole('button', { name: /매수 BTC/ }).click();
+  await expectToast(page, '주문이 접수되었습니다');
+
+  await openTab('미체결 주문');
+  const row = page.locator('.data-table tbody tr').filter({ hasText: '31,000' });
+  await expect(row).toHaveCount(1);
+
+  // edit price 31,000 → 32,500 and qty 0.001 → 0.002 inline
+  await row.getByRole('button', { name: '수정' }).click();
+  await page.getByLabel('주문 가격 수정').fill('32500');
+  await page.getByLabel('주문 수량 수정').fill('0.002');
+  await page.getByRole('button', { name: '확인' }).click();
+  await expectToast(page, '주문이 수정되었습니다');
+
+  // the old price is gone; a single order rests at the new price + qty
+  await expect(page.locator('.data-table tbody tr').filter({ hasText: '31,000' })).toHaveCount(0);
+  const amended = page.locator('.data-table tbody tr').filter({ hasText: '32,500' });
+  await expect(amended).toHaveCount(1);
+  await expect(amended).toContainText('0.002');
+
+  // clean up
+  await amended.getByRole('button', { name: '취소' }).click();
+  await expect(page.locator('.data-table tbody tr').filter({ hasText: '32,500' })).toHaveCount(0);
+});
+
 test('sells the BTC back (market sell, full round trip)', async () => {
   const form = page.getByTestId('order-form');
   await form.getByRole('button', { name: '시장가' }).click();

@@ -71,3 +71,61 @@ describe('OpenOrdersTable trigger orders', () => {
     expect(init.method).toBe('DELETE');
   });
 });
+
+function restingLimit(overrides: Partial<OrderData> = {}): OrderData {
+  return order({
+    type: 'limit',
+    price: toUnits('40'),
+    qty: toUnits('1'),
+    status: 'open',
+    tif: 'GTC',
+    trigger: null,
+    ...overrides,
+  });
+}
+
+describe('OpenOrdersTable amend', () => {
+  it('shows a 수정 button only for plain resting limit orders, not trigger/market orders', () => {
+    useUserStore.setState({ openOrders: [order()] }); // market trigger order
+    const { unmount } = renderWithQuery(<OpenOrdersTable />);
+    expect(screen.queryByTestId('amend-o1')).toBeNull();
+    unmount();
+
+    useUserStore.setState({ openOrders: [restingLimit()] });
+    renderWithQuery(<OpenOrdersTable />);
+    expect(screen.getByTestId('amend-o1')).toBeInTheDocument();
+  });
+
+  it('edits price + qty and PATCHes /api/orders/:id with the new decimal strings', async () => {
+    useUserStore.setState({ openOrders: [restingLimit()] });
+    renderWithQuery(<OpenOrdersTable />);
+
+    fireEvent.click(screen.getByTestId('amend-o1'));
+    // inputs prefill with the current values as clean decimals
+    const priceInput = screen.getByLabelText('주문 가격 수정') as HTMLInputElement;
+    const qtyInput = screen.getByLabelText('주문 수량 수정') as HTMLInputElement;
+    expect(priceInput.value).toBe('40');
+    expect(qtyInput.value).toBe('1');
+
+    fireEvent.change(priceInput, { target: { value: '42.5' } });
+    fireEvent.change(qtyInput, { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: '확인' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/orders/o1');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ price: '42.5', qty: '2' });
+  });
+
+  it('되돌리기 cancels the edit without any request', () => {
+    useUserStore.setState({ openOrders: [restingLimit()] });
+    renderWithQuery(<OpenOrdersTable />);
+
+    fireEvent.click(screen.getByTestId('amend-o1'));
+    expect(screen.getByLabelText('주문 가격 수정')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '되돌리기' }));
+    expect(screen.queryByLabelText('주문 가격 수정')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
