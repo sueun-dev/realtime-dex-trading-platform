@@ -65,8 +65,10 @@ export function registerOrderRoutes(
 
   app.post('/api/orders', { preHandler: authenticate }, async (req) => {
     const parsed = parseOrderRequest(req.body);
+    // a plain market order gets a slippage bound now; a stop-MARKET derives its
+    // bound from the book at activation time (in the engine), so leave it unset
     const request: OrderRequest =
-      parsed.type === 'market' && parsed.price === undefined
+      parsed.type === 'market' && parsed.price === undefined && parsed.trigger === undefined
         ? { ...parsed, price: defaultMarketBound(svc, parsed) }
         : parsed;
 

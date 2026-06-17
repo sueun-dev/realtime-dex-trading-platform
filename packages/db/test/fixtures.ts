@@ -65,6 +65,7 @@ interface OrderInit {
   type?: Order['type'];
   tif?: Order['tif'];
   clientOrderId?: string | null;
+  trigger?: Order['trigger'];
 }
 
 interface PositionChangedInit {
@@ -124,6 +125,7 @@ export function mkOrder(init: OrderInit): Order {
     postOnly: false,
     reduceOnly: false,
     clientOrderId: init.clientOrderId ?? null,
+    trigger: init.trigger ?? null,
     seq: init.seq,
     ts: init.ts,
   };

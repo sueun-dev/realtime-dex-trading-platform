@@ -39,6 +39,7 @@ export function toPublicOrder(o: EngineOrder): Order {
     postOnly: o.postOnly,
     reduceOnly: o.reduceOnly,
     clientOrderId: o.clientOrderId,
+    trigger: o.trigger,
     seq: o.seq,
     ts: o.ts,
   };

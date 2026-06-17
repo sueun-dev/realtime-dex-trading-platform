@@ -81,6 +81,9 @@ export const orders = pgTable(
     postOnly: boolean('post_only').notNull(),
     reduceOnly: boolean('reduce_only').notNull(),
     clientOrderId: text('client_order_id'),
+    /** conditional (stop / take-profit) trigger; null for a normal order */
+    triggerPrice: money('trigger_price'),
+    triggerDirection: text('trigger_direction').$type<'above' | 'below'>(),
     seq: bigint('seq', { mode: 'number' }).notNull(),
     ts: bigint('ts', { mode: 'number' }).notNull(),
   },

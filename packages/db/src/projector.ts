@@ -90,6 +90,8 @@ function orderRow(o: Order): typeof s.orders.$inferInsert {
     postOnly: o.postOnly,
     reduceOnly: o.reduceOnly,
     clientOrderId: o.clientOrderId,
+    triggerPrice: o.trigger ? o.trigger.price : null,
+    triggerDirection: o.trigger ? o.trigger.direction : null,
     seq: o.seq,
     ts: o.ts,
   };

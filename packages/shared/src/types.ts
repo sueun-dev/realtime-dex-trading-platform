@@ -1,8 +1,20 @@
 export type Side = 'buy' | 'sell';
 export type OrderType = 'limit' | 'market';
 export type TimeInForce = 'GTC' | 'IOC' | 'FOK';
-export type OrderStatus = 'open' | 'filled' | 'cancelled' | 'rejected';
+/** 'untriggered' = a conditional (stop/take-profit) order waiting for its trigger. */
+export type OrderStatus = 'open' | 'filled' | 'cancelled' | 'rejected' | 'untriggered';
 export type MarketType = 'spot' | 'perp';
+
+/**
+ * A conditional trigger: the order is dormant until the mark price crosses
+ * `price` in the given `direction`, then it activates into a normal order.
+ * 'above' triggers when mark ≥ price (stop-buy / take-profit-sell);
+ * 'below' triggers when mark ≤ price (stop-sell / take-profit-buy).
+ */
+export interface TriggerSpec {
+  price: bigint;
+  direction: 'above' | 'below';
+}
 
 export interface MarketConfig {
   /** spot: '<BASE>-USDC' (mirrors Upbit 'USDT-<BASE>'); perp: '<BASE>-PERP' */
@@ -37,6 +49,8 @@ export interface OrderRequest {
   /** perp only */
   reduceOnly?: boolean;
   clientOrderId?: string;
+  /** when set, the order is conditional: dormant until the mark crosses the trigger */
+  trigger?: TriggerSpec;
 }
 
 export interface Order {
@@ -54,6 +68,8 @@ export interface Order {
   postOnly: boolean;
   reduceOnly: boolean;
   clientOrderId: string | null;
+  /** conditional trigger; null for a normal order */
+  trigger: TriggerSpec | null;
   /** engine sequence at acceptance — total order over all events */
   seq: number;
   /** epoch ms, supplied by caller (engine is deterministic) */

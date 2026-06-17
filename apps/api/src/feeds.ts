@@ -59,11 +59,26 @@ export function startFeeds(svc: Services): Stoppable {
   const oracle = new PriceOracle();
   const oracleCoins = [...new Set(perps.map((m) => m.base).filter((b) => ORACLE_MAJORS.has(b)))];
 
+  /**
+   * Fire spot conditional (stop/take-profit) orders against the live price.
+   * Spot has no mark price, so the real ticker drives triggers. Only poke
+   * markets that actually hold a pending conditional, to avoid churning the
+   * pipeline for the other ~190 spot markets on every tick.
+   */
+  function pokeSpotTriggers(marketId: string, price: bigint): void {
+    if (price <= 0n || !engine.conditionalMarkets().has(marketId)) return;
+    void pipeline
+      .exec(() => engine.setLastPrice(marketId, price, Date.now()))
+      .catch((e: unknown) => log(`spot trigger ${marketId} failed: ${String(e)}`));
+  }
+
   // ---- spot: Upbit websocket (tickers + REAL market prints) -------------------
   const upbitWs = new UpbitWs(spotUpbitCodes);
-  upbitWs.on('ticker', (t: Ticker) =>
-    priceCache.setTicker({ ...t, marketId: spotMarketIdForUpbitCode(t.marketId) }),
-  );
+  upbitWs.on('ticker', (t: Ticker) => {
+    const marketId = spotMarketIdForUpbitCode(t.marketId);
+    priceCache.setTicker({ ...t, marketId });
+    pokeSpotTriggers(marketId, t.price);
+  });
   upbitWs.on('trade', (t: PublicTrade) =>
     hub.publishExternalTrade({
       id: `u${t.sequentialId}`,
@@ -190,7 +205,9 @@ export function startFeeds(svc: Services): Stoppable {
     void fetchTickersChunked(svc.upbit, spotUpbitCodes)
       .then((tickers) => {
         for (const t of tickers) {
-          priceCache.setTicker({ ...t, marketId: spotMarketIdForUpbitCode(t.marketId) });
+          const marketId = spotMarketIdForUpbitCode(t.marketId);
+          priceCache.setTicker({ ...t, marketId });
+          pokeSpotTriggers(marketId, t.price);
         }
       })
       .catch((e: unknown) => log(`spot ticker poll failed: ${String(e)}`));

@@ -381,6 +381,7 @@ describe('loadRestoreState', () => {
       positions: [],
       leverages: [],
       openOrders: [],
+      conditionalOrders: [],
       markPrices: [],
       lastSeq: 0,
     });

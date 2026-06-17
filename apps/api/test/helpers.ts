@@ -127,6 +127,8 @@ export interface OrderBody {
   tif?: 'GTC' | 'IOC' | 'FOK';
   postOnly?: boolean;
   reduceOnly?: boolean;
+  triggerPrice?: string;
+  triggerDirection?: 'above' | 'below';
 }
 
 export async function placeOrder(

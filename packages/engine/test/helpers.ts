@@ -53,7 +53,13 @@ export function req(
   type: 'limit' | 'market',
   price: bigint | undefined,
   qty: bigint,
-  opts: { tif?: TimeInForce; postOnly?: boolean; reduceOnly?: boolean; clientOrderId?: string } = {},
+  opts: {
+    tif?: TimeInForce;
+    postOnly?: boolean;
+    reduceOnly?: boolean;
+    clientOrderId?: string;
+    trigger?: { price: bigint; direction: 'above' | 'below' };
+  } = {},
 ): OrderRequest {
   const r: OrderRequest = {
     marketId,
@@ -66,6 +72,7 @@ export function req(
   };
   if (price !== undefined) r.price = price;
   if (opts.clientOrderId !== undefined) r.clientOrderId = opts.clientOrderId;
+  if (opts.trigger !== undefined) r.trigger = opts.trigger;
   return r;
 }
 

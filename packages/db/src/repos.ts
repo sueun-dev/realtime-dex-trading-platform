@@ -31,6 +31,8 @@ export interface RestoreState {
   leverages: { userId: string; marketId: string; leverage: number }[];
   /** ascending seq — reinsert FIFO */
   openOrders: Order[];
+  /** untriggered conditional (stop / take-profit) orders, ascending seq */
+  conditionalOrders: Order[];
   markPrices: { marketId: string; price: bigint }[];
   lastSeq: number;
 }
@@ -55,6 +57,10 @@ function toOrder(r: OrderSelect): Order {
     postOnly: r.postOnly,
     reduceOnly: r.reduceOnly,
     clientOrderId: r.clientOrderId,
+    trigger:
+      r.triggerPrice !== null && r.triggerDirection !== null
+        ? { price: r.triggerPrice, direction: r.triggerDirection as 'above' | 'below' }
+        : null,
     seq: r.seq,
     ts: r.ts,
   };
@@ -521,6 +527,11 @@ export function createRepos(db: Db) {
         .from(s.orders)
         .where(eq(s.orders.status, 'open'))
         .orderBy(asc(s.orders.seq));
+      const conditionalRows = await tx
+        .select()
+        .from(s.orders)
+        .where(eq(s.orders.status, 'untriggered'))
+        .orderBy(asc(s.orders.seq));
       const metaRows = await tx
         .select()
         .from(s.meta)
@@ -552,6 +563,7 @@ export function createRepos(db: Db) {
           leverage: r.leverage,
         })),
         openOrders: openOrderRows.map(toOrder),
+        conditionalOrders: conditionalRows.map(toOrder),
         markPrices: metaRows.map((r) => ({
           marketId: r.key.slice(MARK_PRICE_KEY_PREFIX.length),
           price: BigInt(r.value),

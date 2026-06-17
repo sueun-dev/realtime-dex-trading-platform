@@ -41,6 +41,8 @@ export const zOrderRequest = z
     postOnly: z.boolean().default(false),
     reduceOnly: z.boolean().default(false),
     clientOrderId: z.string().min(1).max(64).optional(),
+    triggerPrice: zPositiveUnits.optional(),
+    triggerDirection: z.enum(['above', 'below']).optional(),
   })
   .superRefine((o, ctx) => {
     if (o.type === 'limit' && o.price === undefined) {
@@ -51,6 +53,14 @@ export const zOrderRequest = z
     }
     if (o.type === 'market' && o.tif === 'GTC') {
       ctx.addIssue({ code: 'custom', message: 'market orders must be IOC or FOK', path: ['tif'] });
+    }
+    // a trigger needs both its price and direction together
+    if ((o.triggerPrice === undefined) !== (o.triggerDirection === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'triggerPrice and triggerDirection must be provided together',
+        path: ['triggerPrice'],
+      });
     }
   });
 
@@ -69,6 +79,9 @@ export function parseOrderRequest(input: unknown): OrderRequest {
   };
   if (parsed.price !== undefined) req.price = parsed.price;
   if (parsed.clientOrderId !== undefined) req.clientOrderId = parsed.clientOrderId;
+  if (parsed.triggerPrice !== undefined && parsed.triggerDirection !== undefined) {
+    req.trigger = { price: parsed.triggerPrice, direction: parsed.triggerDirection };
+  }
   return req;
 }
 

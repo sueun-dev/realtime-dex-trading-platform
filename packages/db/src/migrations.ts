@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS orders (
   post_only boolean NOT NULL,
   reduce_only boolean NOT NULL,
   client_order_id text,
+  trigger_price numeric(38,0),
+  trigger_direction text,
   seq bigint NOT NULL,
   ts bigint NOT NULL
 );

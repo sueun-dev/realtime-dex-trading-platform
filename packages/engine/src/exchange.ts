@@ -12,7 +12,9 @@ import {
   isMultipleOf,
   maxBig,
   minBig,
+  mulDiv,
   mulUnits,
+  roundToTick,
   signBig,
   type AccountSummary,
   type Balance,
@@ -26,6 +28,7 @@ import {
   type Position,
   type Side,
   type Trade,
+  type TriggerSpec,
 } from '@dex/shared';
 import { Ledger } from './ledger.js';
 import { OrderBook, remainingQty, toPublicOrder, type EngineOrder } from './orderbook.js';
@@ -66,6 +69,11 @@ export class Exchange {
   /** `${userId} ${marketId}` -> leverage */
   private readonly leverages = new Map<string, number>();
   private readonly markPrices = new Map<string, bigint>();
+  /** untriggered conditional (stop/take-profit) orders, by id; lock nothing until they fire */
+  private readonly conditionalOrders = new Map<string, EngineOrder>();
+  private readonly conditionalByUser = new Map<string, Set<string>>();
+  /** last trade/reference price per market, for evaluating spot triggers */
+  private readonly lastPrices = new Map<string, bigint>();
   private seqCounter = 0;
   /** when true, bad debt that insurance can't cover is socialized via ADL
    * (auto-deleveraging profitable counterparties) before the house clearing
@@ -169,6 +177,10 @@ export class Exchange {
     const ms = this.markets.get(req.marketId);
     if (!ms) return reject('MARKET_NOT_FOUND', `unknown market ${req.marketId}`);
     const m = ms.config;
+
+    // conditional (stop / take-profit) orders: dormant until the mark crosses
+    // the trigger; validated + locked + matched only at activation
+    if (req.trigger !== undefined) return this.placeConditional(ms, userId, req, ts);
 
     // structural validity
     if (req.type === 'market' && req.price === undefined) {
@@ -274,6 +286,7 @@ export class Exchange {
       postOnly: req.postOnly === true,
       reduceOnly,
       clientOrderId: req.clientOrderId ?? null,
+      trigger: null,
       seq: s,
       ts,
       lockRemaining: required,
@@ -323,6 +336,164 @@ export class Exchange {
       }
     }
     return evts;
+  }
+
+  /**
+   * Place a conditional (stop / take-profit) order. It locks nothing and does
+   * not match — it rests in `conditionalOrders` until `setMarkPrice` sees the
+   * mark cross the trigger, at which point it activates into a normal order
+   * (validated + locked + matched then, against the live book). reduceOnly and
+   * margin are deliberately re-checked at activation, not now, since the
+   * position/balance can change while the order waits.
+   */
+  private placeConditional(ms: MarketState, userId: string, req: OrderRequest, ts: number): EngineEvent[] {
+    const m = ms.config;
+    const evts: EngineEvent[] = [];
+    const reject = (code: string, reason: string): EngineEvent[] => {
+      evts.push({
+        kind: 'orderRejected',
+        seq: this.nextSeq(),
+        ts,
+        userId,
+        marketId: req.marketId,
+        code,
+        reason,
+        clientOrderId: req.clientOrderId ?? null,
+      });
+      return evts;
+    };
+    const trig = req.trigger!;
+    if (trig.price <= 0n || !isMultipleOf(trig.price, m.tickSize)) {
+      return reject('TICK_SIZE', 'trigger price not a positive tick multiple');
+    }
+    if (req.type === 'limit' && req.price === undefined) {
+      return reject('INVALID_ORDER', 'stop-limit orders require a limit price');
+    }
+    if (req.type === 'market' && req.tif === 'GTC') {
+      return reject('INVALID_ORDER', 'stop-market orders must be IOC or FOK');
+    }
+    if (req.type === 'market' && req.postOnly) {
+      return reject('INVALID_ORDER', 'market orders cannot be postOnly');
+    }
+    if (req.qty <= 0n || !isMultipleOf(req.qty, m.lotSize)) {
+      return reject('LOT_SIZE', 'qty not a positive lot multiple');
+    }
+    if (req.price !== undefined) {
+      if (req.price <= 0n || !isMultipleOf(req.price, m.tickSize)) {
+        return reject('TICK_SIZE', 'price not a positive tick multiple');
+      }
+      if (mulUnits(req.price, req.qty) < m.minNotional) {
+        return reject('MIN_NOTIONAL', 'order notional below minimum');
+      }
+    }
+    if (req.clientOrderId !== undefined && this.clientIds.get(userId)?.has(req.clientOrderId)) {
+      return reject('DUPLICATE_CLIENT_ORDER_ID', `clientOrderId ${req.clientOrderId} already in use`);
+    }
+
+    const s = this.nextSeq();
+    const order: EngineOrder = {
+      id: `o${s}`,
+      userId,
+      marketId: req.marketId,
+      side: req.side,
+      type: req.type,
+      price: req.price ?? null,
+      qty: req.qty,
+      filledQty: 0n,
+      status: 'untriggered',
+      tif: req.tif,
+      postOnly: req.postOnly === true,
+      reduceOnly: req.reduceOnly === true,
+      clientOrderId: req.clientOrderId ?? null,
+      trigger: { price: trig.price, direction: trig.direction },
+      seq: s,
+      ts,
+      lockRemaining: 0n,
+      lockAsset: null,
+      leverage: m.type === 'perp' ? this.leverageOf(userId, req.marketId) : 1,
+      resting: false,
+    };
+    this.conditionalOrders.set(order.id, order);
+    let set = this.conditionalByUser.get(userId);
+    if (!set) {
+      set = new Set();
+      this.conditionalByUser.set(userId, set);
+    }
+    set.add(order.id);
+    if (order.clientOrderId !== null) {
+      let cids = this.clientIds.get(userId);
+      if (!cids) {
+        cids = new Map();
+        this.clientIds.set(userId, cids);
+      }
+      cids.set(order.clientOrderId, order.id);
+    }
+    evts.push({ kind: 'orderAccepted', seq: this.nextSeq(), ts, order: toPublicOrder(order) });
+    // a freshly placed trigger may already be in-the-money at the current price
+    const ref = this.refPrice(m.id);
+    if (ref !== undefined) this.activateTriggers(ms, ref, evts, ts);
+    return evts;
+  }
+
+  /** Drop a conditional order from all indexes (used on activation + cancel). */
+  private removeConditional(o: EngineOrder): void {
+    this.conditionalOrders.delete(o.id);
+    this.conditionalByUser.get(o.userId)?.delete(o.id);
+    if (o.clientOrderId !== null) this.clientIds.get(o.userId)?.delete(o.clientOrderId);
+  }
+
+  /**
+   * Activate every conditional order on this market whose trigger the mark has
+   * now crossed, in seq (placement) order. Each fires as a fresh normal order
+   * through the fully-tested submitOrder path (so locking/matching/reduceOnly
+   * are identical to a directly-placed order). The conditional is retired with
+   * an orderCancelled(reason:'triggered') marking it consumed.
+   */
+  private activateTriggers(ms: MarketState, mark: bigint, evts: EngineEvent[], ts: number): void {
+    const m = ms.config;
+    const due = [...this.conditionalOrders.values()]
+      .filter((o) => o.marketId === m.id && this.triggerHit(o.trigger!, mark))
+      .sort((a, b) => a.seq - b.seq);
+    for (const o of due) {
+      this.removeConditional(o);
+      o.status = 'cancelled';
+      this.retire(o); // keep it queryable via getOrder (bounded cache)
+      evts.push({
+        kind: 'orderCancelled',
+        seq: this.nextSeq(),
+        ts,
+        orderId: o.id,
+        userId: o.userId,
+        marketId: m.id,
+        remainingQty: remainingQty(o),
+        reason: 'triggered',
+      });
+      const activation: OrderRequest = {
+        marketId: o.marketId,
+        side: o.side,
+        type: o.type,
+        qty: o.qty,
+        tif: o.tif,
+        postOnly: o.postOnly,
+        reduceOnly: o.reduceOnly,
+      };
+      if (o.price !== null) activation.price = o.price;
+      // a stop-MARKET with no preset bound derives a worst price from the live book
+      if (o.type === 'market' && o.price === null) {
+        const best = ms.book.opposite(o.side).best();
+        if (best === undefined) continue; // no book to price against — drop silently (conditional already retired)
+        const bound =
+          o.side === 'buy'
+            ? roundToTick(mulDiv(best.price, 105n, 100n), m.tickSize, 'ceil')
+            : roundToTick(mulDiv(best.price, 95n, 100n), m.tickSize, 'floor');
+        activation.price = bound;
+      }
+      evts.push(...this.submitOrder(o.userId, activation, ts));
+    }
+  }
+
+  private triggerHit(trig: TriggerSpec, mark: bigint): boolean {
+    return trig.direction === 'above' ? mark >= trig.price : mark <= trig.price;
   }
 
   // ---------------------------------------------------------------- matching
@@ -781,6 +952,28 @@ export class Exchange {
   }
 
   cancelOrder(userId: string, orderId: string, ts: number): EngineEvent[] {
+    // untriggered conditional orders cancel without any lock to release
+    const cond = this.conditionalOrders.get(orderId);
+    if (cond !== undefined) {
+      if (cond.userId !== userId) {
+        throw new DexError('NOT_AUTHORIZED', `order ${orderId} belongs to another user`);
+      }
+      this.removeConditional(cond);
+      cond.status = 'cancelled';
+      this.retire(cond); // queryable via getOrder
+      return [
+        {
+          kind: 'orderCancelled',
+          seq: this.nextSeq(),
+          ts,
+          orderId,
+          userId,
+          marketId: cond.marketId,
+          remainingQty: remainingQty(cond),
+          reason: 'user',
+        },
+      ];
+    }
     const o = this.orders.get(orderId);
     if (!o || o.status !== 'open' || !o.resting) {
       throw new DexError('ORDER_NOT_FOUND', `order ${orderId} not found or not open`);
@@ -823,10 +1016,39 @@ export class Exchange {
     if (!ms) throw new DexError('MARKET_NOT_FOUND', `unknown market ${marketId}`);
     if (price <= 0n) throw new DexError('INVALID_ORDER', 'mark price must be > 0');
     this.markPrices.set(marketId, price);
+    this.lastPrices.set(marketId, price);
     const evts: EngineEvent[] = [];
     evts.push({ kind: 'markPrice', seq: this.nextSeq(), ts, marketId, price });
     this.liquidationSweep(ms, evts, ts);
+    this.activateTriggers(ms, price, evts, ts);
     return evts;
+  }
+
+  /**
+   * Feed the latest trade/reference price for a market (spot has no mark price,
+   * so the api pushes the live ticker here) and fire any conditional orders the
+   * price now triggers. No liquidation (that's perp-only via setMarkPrice).
+   */
+  setLastPrice(marketId: string, price: bigint, ts: number): EngineEvent[] {
+    const ms = this.markets.get(marketId);
+    if (!ms) throw new DexError('MARKET_NOT_FOUND', `unknown market ${marketId}`);
+    if (price <= 0n) throw new DexError('INVALID_ORDER', 'price must be > 0');
+    this.lastPrices.set(marketId, price);
+    const evts: EngineEvent[] = [];
+    this.activateTriggers(ms, price, evts, ts);
+    return evts;
+  }
+
+  /** Reference price for trigger evaluation: mark (perp) or last trade (spot). */
+  private refPrice(marketId: string): bigint | undefined {
+    return this.markPrices.get(marketId) ?? this.lastPrices.get(marketId);
+  }
+
+  /** Markets that currently hold at least one untriggered conditional order. */
+  conditionalMarkets(): Set<string> {
+    const out = new Set<string>();
+    for (const o of this.conditionalOrders.values()) out.add(o.marketId);
+    return out;
   }
 
   // ------------------------------------------------------------- liquidation
@@ -1009,11 +1231,16 @@ export class Exchange {
         out.push(toPublicOrder(o));
       }
     }
+    // include untriggered conditional (stop / take-profit) orders
+    for (const id of this.conditionalByUser.get(userId) ?? []) {
+      const o = this.conditionalOrders.get(id);
+      if (o && (marketId === undefined || o.marketId === marketId)) out.push(toPublicOrder(o));
+    }
     return out.sort((a, b) => a.seq - b.seq);
   }
 
   getOrder(orderId: string): Order | undefined {
-    const o = this.orders.get(orderId) ?? this.terminalOrders.get(orderId);
+    const o = this.orders.get(orderId) ?? this.conditionalOrders.get(orderId) ?? this.terminalOrders.get(orderId);
     return o ? toPublicOrder(o) : undefined;
   }
 
@@ -1079,6 +1306,7 @@ export class Exchange {
     positions: Position[];
     leverages: { userId: string; marketId: string; leverage: number }[];
     openOrders: Order[];
+    conditionalOrders?: Order[];
     markPrices: { marketId: string; price: bigint }[];
     lastSeq: number;
   }): void {
@@ -1086,6 +1314,8 @@ export class Exchange {
     this.positions.clear();
     this.orders.clear();
     this.terminalOrders.clear();
+    this.conditionalOrders.clear();
+    this.conditionalByUser.clear();
     this.openByUser.clear();
     this.clientIds.clear();
     this.leverages.clear();
@@ -1124,6 +1354,33 @@ export class Exchange {
       if (!set) {
         set = new Set();
         this.openByUser.set(eo.userId, set);
+      }
+      set.add(eo.id);
+      if (eo.clientOrderId !== null) {
+        let cids = this.clientIds.get(eo.userId);
+        if (!cids) {
+          cids = new Map();
+          this.clientIds.set(eo.userId, cids);
+        }
+        cids.set(eo.clientOrderId, eo.id);
+      }
+    }
+    // restore untriggered conditional (stop / take-profit) orders — they lock
+    // nothing and only fire on a future mark cross, so just reinstate the index
+    for (const o of [...(state.conditionalOrders ?? [])].sort((a, b) => a.seq - b.seq)) {
+      if (!this.markets.has(o.marketId)) {
+        throw new DexError('MARKET_NOT_FOUND', `restore: unknown market ${o.marketId}`);
+      }
+      if (o.status !== 'untriggered' || o.trigger === null) {
+        throw new DexError('INTERNAL', `restore: conditional ${o.id} not restorable`);
+      }
+      const leverage = this.leverageOf(o.userId, o.marketId);
+      const eo: EngineOrder = { ...o, lockRemaining: 0n, lockAsset: null, leverage, resting: false };
+      this.conditionalOrders.set(eo.id, eo);
+      let set = this.conditionalByUser.get(eo.userId);
+      if (!set) {
+        set = new Set();
+        this.conditionalByUser.set(eo.userId, set);
       }
       set.add(eo.id);
       if (eo.clientOrderId !== null) {

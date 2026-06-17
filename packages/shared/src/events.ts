@@ -6,7 +6,8 @@ export type CancelReason =
   | 'selfTrade'
   | 'liquidation'
   | 'slippage'
-  | 'bookExhausted';
+  | 'bookExhausted'
+  | 'triggered';
 
 export type BalanceReason =
   | 'deposit'
