@@ -218,26 +218,30 @@ async function applyFunding(ex: DbExecutor, e: FundingAppliedEvent): Promise<voi
     seq: e.seq,
     ts: e.ts,
   });
-  // Funding is applied directly to the position's isolated margin
-  // (ARCHITECTURE.md "Funding": eroded margin can trigger liquidation).
+  // PAYER funding (payment < 0) is charged against the position's isolated
+  // margin (ARCHITECTURE.md "Funding": eroded margin can trigger liquidation).
   // Mirror it onto the projection so a funding-eroded margin survives a boot
-  // restore exactly instead of snapping back to its last positionChanged
-  // value.
-  // fundingApplied is emitted per position holder, so the row must exist — a
+  // restore exactly instead of snapping back to its last positionChanged value.
+  // RECEIVER funding (payment >= 0) is credited to the withdrawable wallet and
+  // arrives as a separate `balanceChanged` event — it must NOT also be added to
+  // margin here, so we skip the margin mirror for non-negative payments.
+  // For payers the position row must exist (fundingApplied is per holder); a
   // missing row means a corrupted/partial stream. NOTE for the engine
   // (cross-package assumption): the per-market funding rounding remainder
   // absorbed by FEE_ACCOUNT (ARCHITECTURE.md) must be emitted as a
   // `balanceChanged` event, NOT as a `fundingApplied` for an account with no
   // position — the latter is rejected here as corruption.
-  const updated = await ex
-    .update(s.positions)
-    .set({ margin: sql`${s.positions.margin} + ${e.payment.toString()}::numeric` })
-    .where(and(eq(s.positions.userId, e.userId), eq(s.positions.marketId, e.marketId)))
-    .returning({ userId: s.positions.userId });
-  if (updated.length === 0) {
-    throw new Error(
-      `fundingApplied seq=${e.seq}: no open position for ${e.userId} on ${e.marketId} (corrupted or partial event stream)`,
-    );
+  if (e.payment < 0n) {
+    const updated = await ex
+      .update(s.positions)
+      .set({ margin: sql`${s.positions.margin} + ${e.payment.toString()}::numeric` })
+      .where(and(eq(s.positions.userId, e.userId), eq(s.positions.marketId, e.marketId)))
+      .returning({ userId: s.positions.userId });
+    if (updated.length === 0) {
+      throw new Error(
+        `fundingApplied seq=${e.seq}: no open position for ${e.userId} on ${e.marketId} (corrupted or partial event stream)`,
+      );
+    }
   }
 }
 

@@ -151,8 +151,10 @@ function genStream(rng: () => number, n: number): GenResult {
     const pos = positions.get(key);
     if (userId === undefined || pos === undefined) throw new Error('unreachable');
     const payment = randBig(rng, 20n * SCALE) - 10n * SCALE; // signed
-    // funding hits the isolated margin; unknown (null) + delta stays unknown
-    if (pos.margin !== null) pos.margin += payment;
+    // only PAYER funding (negative) erodes isolated margin; RECEIVER funding
+    // (>= 0) is credited to the wallet, not margin. Unknown (null) margin + a
+    // payer delta stays unknown.
+    if (pos.margin !== null && payment < 0n) pos.margin += payment;
     const h = next();
     events.push({
       kind: 'fundingApplied',

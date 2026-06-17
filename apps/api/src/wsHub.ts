@@ -3,6 +3,7 @@ import {
   FEE_ACCOUNT,
   jsonSafe,
   type EngineEvent,
+  type FundingInfo,
   type Ticker,
   type Trade,
 } from '@dex/shared';
@@ -62,6 +63,7 @@ export class WsHub implements EventSink {
   readonly #verifyToken: (token: string) => Promise<string | null>;
   readonly #tradeRing = new Map<string, unknown[]>();
   readonly #tickers = new Map<string, unknown>();
+  readonly #funding = new Map<string, unknown>();
   #tickerQueue = new Map<string, unknown>();
   readonly #dirtyBooks = new Set<string>();
   /** per-channel monotonic frame counter, stamped onto every outbound frame */
@@ -239,6 +241,21 @@ export class WsHub implements EventSink {
     return this.#tickers.get(marketId);
   }
 
+  /** Current REAL perp funding rate (from Hyperliquid) for a market. */
+  publishFunding(info: FundingInfo): void {
+    const wire = jsonSafe(info);
+    this.#funding.set(info.marketId, wire);
+    this.#broadcast(`funding:${info.marketId}`, wire);
+  }
+
+  getFunding(marketId: string): unknown {
+    return this.#funding.get(marketId);
+  }
+
+  allFunding(): unknown[] {
+    return [...this.#funding.values()];
+  }
+
   recentTrades(marketId: string): unknown[] {
     return this.#tradeRing.get(marketId) ?? [];
   }
@@ -359,6 +376,9 @@ export class WsHub implements EventSink {
     } else if (channel.startsWith('trades:')) {
       const ring = this.#tradeRing.get(channel.slice('trades:'.length));
       if (ring && ring.length > 0) this.#sendSnapshot(conn, channel, ring);
+    } else if (channel.startsWith('funding:')) {
+      const f = this.#funding.get(channel.slice('funding:'.length));
+      if (f !== undefined) this.#sendSnapshot(conn, channel, f);
     }
   }
 

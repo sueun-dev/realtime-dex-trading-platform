@@ -270,12 +270,15 @@ describe('projector', () => {
         marketId: PERP,
         userId: ALICE,
         rate: -2_000n,
-        payment: 1n * SCALE + 1n, // next hour: long receives
+        payment: 1n * SCALE + 1n, // next hour: long receives → wallet credit, NOT margin
         markPrice: 49_900n * SCALE,
       },
     ]);
 
-    const expected = margin - 7n * SCALE - 3n + 1n * SCALE + 1n;
+    // only the PAYER funding (seq 2, negative) erodes isolated margin; the
+    // RECEIVER funding (seq 3, positive) is credited to the withdrawable wallet
+    // via a separate balanceChanged event and never inflates margin
+    const expected = margin - 7n * SCALE - 3n;
     const [pos] = await repos.positions.forUser(ALICE);
     expect(pos?.margin).toBe(expected);
 

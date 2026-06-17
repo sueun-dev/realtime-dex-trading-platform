@@ -268,8 +268,12 @@ describe('perp engine', () => {
     const byUser = new Map(fund.map((e) => (e.kind === 'fundingApplied' ? [e.userId, e.payment] : ['', 0n])));
     expect(byUser.get('alice')).toBe(-u('0.01')); // long pays
     expect(byUser.get('bob')).toBe(u('0.01')); // short receives
+    // payer's funding erodes isolated margin; receiver's funding is credited to
+    // the withdrawable wallet (available), not locked into margin
+    const bobAvailBefore = u(100_000) - u(100) - feeOn(u(100), PERP.makerFeeBps);
     expect(ex.getPosition('alice', M)!.margin).toBe(u(100) - u('0.01'));
-    expect(ex.getPosition('bob', M)!.margin).toBe(u(100) + u('0.01'));
+    expect(ex.getPosition('bob', M)!.margin).toBe(u(100));
+    expect(usdc(ex, 'bob').available).toBe(bobAvailBefore + u('0.01'));
     t.check(ex);
   });
 
@@ -347,9 +351,12 @@ describe('perp engine', () => {
     const clearing = ex.getBalances(CLEARING_ACCOUNT).find((b) => b.asset === 'USDC')?.available ?? 0n;
     expect(fee).toBe(0n); // cannot go negative -> transfer clamped
     expect(clearing).toBe(-sum); // clearing carries the crumb instead
-    // margins + clearing still conserve exactly (no money created)
-    const margins = ex.getPosition('alice', M)!.margin + ex.getPosition('bob', M)!.margin;
-    expect(margins + clearing).toBe(u(22));
+    // full equity still conserves exactly (no money created). The receiver's
+    // funding now lands in available (not margin), so conservation is checked
+    // across the whole system: wallets + margins + clearing + fee.
+    const aliceEq = usdc(ex, 'alice').available + ex.getPosition('alice', M)!.margin;
+    const bobEq = usdc(ex, 'bob').available + ex.getPosition('bob', M)!.margin;
+    expect(aliceEq + bobEq + clearing + fee).toBe(u(2022)); // 2×(1000 wallet + 11 margin)
   });
 
   it('insufficient margin rejection uses INSUFFICIENT_MARGIN', () => {

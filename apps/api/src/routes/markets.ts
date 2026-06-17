@@ -33,7 +33,19 @@ export function registerMarketRoutes(app: FastifyInstance, svc: Services): void 
     return engine.getMarkets().map((m) => ({
       ...(jsonSafe(m) as Record<string, unknown>),
       ticker: hub.getTicker(m.id) ?? null,
+      funding: m.type === 'perp' ? (hub.getFunding(m.id) ?? null) : null,
     }));
+  });
+
+  // current REAL perp funding rates (Hyperliquid) + next-settlement time
+  app.get('/api/funding', () => hub.allFunding());
+
+  app.get('/api/markets/:id/funding', (req, reply) => {
+    const { id } = req.params as { id: string };
+    const m = engine.getMarket(id);
+    if (!m) throw new DexError('MARKET_NOT_FOUND', `unknown market ${id}`);
+    const f = hub.getFunding(id);
+    return f ?? reply.status(404).send({ error: 'no funding data yet' });
   });
 
   app.get('/api/markets/:id/orderbook', (req) => {

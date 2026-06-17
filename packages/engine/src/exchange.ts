@@ -1246,8 +1246,26 @@ export class Exchange {
     let sumPayments = 0n;
     for (const pos of holders) {
       let payment = -mulUnits(mulUnits(pos.size, mark), rate);
-      if (payment < -pos.margin) payment = -pos.margin; // margin can never go negative
-      pos.margin += payment;
+      if (payment >= 0n) {
+        // RECEIVER: funding income is credited to the withdrawable wallet
+        // balance, NOT added to isolated margin. Crediting margin would lock the
+        // income as non-withdrawable collateral and raise the maintenance buffer
+        // above what the user actually deposited — both wrong. (Mirrors how a
+        // close settles realized gains to `available`.) The wallet credit is
+        // persisted via this balanceChanged event, so the projector must NOT
+        // also mirror a receiver's payment onto margin.
+        if (payment > 0n) {
+          this.ledger.credit(pos.userId, m.quote, payment);
+          this.emitBalance(evts, ts, pos.userId, m.quote, 'funding');
+        }
+      } else {
+        // PAYER: funding is charged against the position's isolated margin. If it
+        // erodes margin below maintenance, the sweep below liquidates the
+        // position — funding never reaches into the free wallet, which is the
+        // defining property of isolated margin (loss is capped at posted margin).
+        if (payment < -pos.margin) payment = -pos.margin; // margin can never go negative
+        pos.margin += payment;
+      }
       this.ledger.credit(CLEARING_ACCOUNT, m.quote, -payment);
       sumPayments += payment;
       evts.push({

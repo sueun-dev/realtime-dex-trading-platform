@@ -138,6 +138,18 @@ export interface Ticker {
   ts: number;
 }
 
+export interface FundingInfo {
+  marketId: string;
+  /** funding rate for one interval, 1e8 units (0.0001 → 1e4); sign = longs pay shorts when positive */
+  rate: bigint;
+  /** funding interval length in ms (Hyperliquid settles hourly) */
+  intervalMs: number;
+  /** epoch ms of the next funding settlement */
+  nextFundingTs: number;
+  /** epoch ms when this rate was observed from the venue */
+  ts: number;
+}
+
 export type CandleInterval = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
 export interface Candle {
