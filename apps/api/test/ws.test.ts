@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { toUnits } from '@dex/shared';
 import {
+  TEST_PERP,
   TEST_SPOT,
   loginAndFund,
   makeApp,
@@ -12,6 +13,7 @@ import {
 } from './helpers.js';
 
 const M = TEST_SPOT.id;
+const M2 = TEST_PERP.id;
 
 let t: TestApp;
 let base = '';
@@ -22,6 +24,7 @@ interface Frame {
   channel: string;
   data: unknown;
   seq?: number;
+  reset?: boolean;
 }
 
 class WsProbe {
@@ -218,6 +221,89 @@ describe('websocket hub', () => {
     const health = await t.app.inject({ method: 'GET', url: '/api/health' });
     expect(health.statusCode).toBe(200);
     fresh.close();
+  });
+
+  it('stamps a strictly +1 per-channel seq on consecutive frames of the same channel', async () => {
+    const probe = new WsProbe(base);
+    await probe.ready();
+    probe.send({ op: 'subscribe', channel: `orderbook:${M}`, market: M });
+
+    // first frame is a fresh snapshot: carries the channel's current seq + reset
+    const initial = await probe.waitFor((f) => f.channel === `orderbook:${M}`);
+    expect(initial.reset).toBe(true);
+    expect(typeof initial.seq).toBe('number');
+
+    // each fill dirties the book → one more orderbook broadcast (seq += 1)
+    for (let i = 0; i < 3; i++) {
+      await placeOrder(t.app, alice, {
+        marketId: M,
+        side: 'sell',
+        type: 'limit',
+        price: String(200 + i),
+        qty: '0.01',
+        tif: 'GTC',
+      });
+      // wait until we've observed (i + 1) live (non-reset) frames after the snapshot
+      await probe.waitFor(
+        (f) => f.channel === `orderbook:${M}` && f.reset !== true,
+        4000,
+      );
+      // give the throttled book flush room to emit before the next order
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    const seqs = probe.frames
+      .filter((f) => f.channel === `orderbook:${M}`)
+      .map((f) => f.seq as number);
+    expect(seqs.length).toBeGreaterThanOrEqual(2);
+    // strictly monotonic by exactly +1, with no gaps, across the whole channel
+    for (let i = 1; i < seqs.length; i++) {
+      expect(seqs[i]).toBe(seqs[i - 1]! + 1);
+    }
+    probe.close();
+  });
+
+  it('gives different channels independent per-channel sequences', async () => {
+    const probe = new WsProbe(base);
+    await probe.ready();
+    probe.send({ op: 'subscribe', channel: `orderbook:${M}`, market: M });
+    probe.send({ op: 'subscribe', channel: `orderbook:${M2}`, market: M2 });
+
+    const a0 = await probe.waitFor((f) => f.channel === `orderbook:${M}`);
+    const b0 = await probe.waitFor((f) => f.channel === `orderbook:${M2}`);
+    // both snapshots are resets; their seqs are tracked per-channel, not shared
+    expect(a0.reset).toBe(true);
+    expect(b0.reset).toBe(true);
+
+    // drive several broadcasts on channel A only
+    const countA = () => probe.frames.filter((f) => f.channel === `orderbook:${M}`).length;
+    const before = countA();
+    for (let i = 0; i < 2; i++) {
+      await placeOrder(t.app, alice, {
+        marketId: M,
+        side: 'sell',
+        type: 'limit',
+        price: String(300 + i),
+        qty: '0.01',
+        tif: 'GTC',
+      });
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    await probe.waitFor(() => countA() >= before + 1);
+
+    const aSeqs = probe.frames
+      .filter((f) => f.channel === `orderbook:${M}`)
+      .map((f) => f.seq as number);
+    const bSeqs = probe.frames
+      .filter((f) => f.channel === `orderbook:${M2}`)
+      .map((f) => f.seq as number);
+
+    // A advanced; B did not — the counters are not a shared global sequence
+    expect(aSeqs[aSeqs.length - 1]!).toBeGreaterThan(aSeqs[0]!);
+    expect(bSeqs.every((s) => s === bSeqs[0])).toBe(true);
+    // each channel's own seqs are still gap-free +1 steps
+    for (let i = 1; i < aSeqs.length; i++) expect(aSeqs[i]).toBe(aSeqs[i - 1]! + 1);
+    probe.close();
   });
 
   it('unauthenticated sockets never receive user frames', async () => {

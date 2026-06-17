@@ -152,6 +152,77 @@ describe('WsClient', () => {
     client.destroy();
   });
 
+  it('fires onGap when an orderbook seq skips ahead, and not on a normal +1 sequence', () => {
+    const client = new WsClient('ws://test/ws');
+    const sock = MockWebSocket.instances[0]!;
+    sock.open();
+
+    const handler = vi.fn();
+    const onGap = vi.fn();
+    client.subscribe('orderbook:BTC-USDC', handler, { onGap });
+
+    // first frame is the server's fresh-subscribe snapshot: sets the baseline
+    sock.message({ channel: 'orderbook:BTC-USDC', data: { bids: [], asks: [] }, seq: 5, reset: true });
+    expect(onGap).not.toHaveBeenCalled();
+
+    // exactly +1 → normal, no resync
+    sock.message({ channel: 'orderbook:BTC-USDC', data: { bids: [], asks: [] }, seq: 6 });
+    expect(onGap).not.toHaveBeenCalled();
+
+    // jump from 6 to 9 → dropped frames → resync requested once
+    sock.message({ channel: 'orderbook:BTC-USDC', data: { bids: [], asks: [] }, seq: 9 });
+    expect(onGap).toHaveBeenCalledTimes(1);
+    expect(onGap).toHaveBeenCalledWith('orderbook:BTC-USDC');
+
+    // baseline resumed from 9 → the next +1 frame is normal again
+    sock.message({ channel: 'orderbook:BTC-USDC', data: { bids: [], asks: [] }, seq: 10 });
+    expect(onGap).toHaveBeenCalledTimes(1);
+
+    // frame data still reaches the handler throughout
+    expect(handler).toHaveBeenCalledTimes(4);
+
+    client.destroy();
+  });
+
+  it('does not treat a reset snapshot as a gap even when seq moves backward', () => {
+    const client = new WsClient('ws://test/ws');
+    const sock = MockWebSocket.instances[0]!;
+    sock.open();
+
+    const onGap = vi.fn();
+    client.subscribe('orderbook:ETH-USDC', vi.fn(), { onGap });
+
+    sock.message({ channel: 'orderbook:ETH-USDC', data: {}, seq: 42 });
+    // a reset (e.g. after reconnect/resubscribe) re-baselines, never a gap
+    sock.message({ channel: 'orderbook:ETH-USDC', data: {}, seq: 1, reset: true });
+    sock.message({ channel: 'orderbook:ETH-USDC', data: {}, seq: 2 });
+    expect(onGap).not.toHaveBeenCalled();
+
+    client.destroy();
+  });
+
+  it('isolates per-channel seq tracking — a gap on trades does not fire the orderbook onGap', () => {
+    const client = new WsClient('ws://test/ws');
+    const sock = MockWebSocket.instances[0]!;
+    sock.open();
+
+    const bookGap = vi.fn();
+    const tradesHandler = vi.fn();
+    client.subscribe('orderbook:BTC-USDC', vi.fn(), { onGap: bookGap });
+    // trades has no onGap; a gap there must not crash and must not touch the book
+    client.subscribe('trades:BTC-USDC', tradesHandler);
+
+    sock.message({ channel: 'orderbook:BTC-USDC', data: {}, seq: 1 });
+    sock.message({ channel: 'trades:BTC-USDC', data: [], seq: 1 });
+    sock.message({ channel: 'trades:BTC-USDC', data: [], seq: 50 }); // big gap on trades
+    sock.message({ channel: 'orderbook:BTC-USDC', data: {}, seq: 2 }); // book still +1
+
+    expect(bookGap).not.toHaveBeenCalled();
+    expect(tradesHandler).toHaveBeenCalledTimes(2);
+
+    client.destroy();
+  });
+
   it('emits status events and stops reconnecting after destroy', () => {
     const client = new WsClient('ws://test/ws');
     const sock = MockWebSocket.instances[0]!;

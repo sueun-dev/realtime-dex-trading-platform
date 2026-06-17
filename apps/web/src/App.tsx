@@ -119,14 +119,30 @@ export default function App() {
 
     // The server only ever sends full {type:'snapshot'} orderbook frames
     // (never deltas), so we always replace the book and thread the `stale` flag.
-    const unBook = ws.subscribe(`orderbook:${selectedId}`, (data, seq) => {
-      const msg = data as BookMessage | null;
-      if (msg === null || typeof msg !== 'object') return;
-      const bids = parseLevels(msg.bids);
-      const asks = parseLevels(msg.asks);
-      const msgSeq = typeof msg.seq === 'number' ? msg.seq : (seq ?? 0);
-      useBookStore.getState().setSnapshot(selectedId, bids, asks, msgSeq, msg.stale === true);
-    });
+    // The WS `seq` is a per-channel counter; on a detected gap (dropped frame)
+    // we resync by refetching a REST snapshot for this market.
+    const resyncBook = (): void => {
+      api
+        .orderbook(selectedId, 20)
+        .then((ob) => {
+          useBookStore
+            .getState()
+            .setSnapshot(selectedId, parseLevels(ob.bids), parseLevels(ob.asks), ob.seq, ob.stale === true);
+        })
+        .catch(() => undefined);
+    };
+    const unBook = ws.subscribe(
+      `orderbook:${selectedId}`,
+      (data, seq) => {
+        const msg = data as BookMessage | null;
+        if (msg === null || typeof msg !== 'object') return;
+        const bids = parseLevels(msg.bids);
+        const asks = parseLevels(msg.asks);
+        const msgSeq = typeof msg.seq === 'number' ? msg.seq : (seq ?? 0);
+        useBookStore.getState().setSnapshot(selectedId, bids, asks, msgSeq, msg.stale === true);
+      },
+      { onGap: resyncBook },
+    );
 
     const unTrades = ws.subscribe(`trades:${selectedId}`, (data) => {
       const arr = (Array.isArray(data) ? data : [data]) as TradeWire[];

@@ -45,9 +45,16 @@ const INTERNAL_ACCOUNTS = new Set([FEE_ACCOUNT, CLEARING_ACCOUNT]);
 /**
  * WebSocket hub for the /ws contract:
  *   in : {op:'subscribe'|'unsubscribe', channel} | {op:'auth', token} | {op:'ping'}
- *   out: {channel, data, seq}
+ *   out: {channel, data, seq, reset?}
  * Channels: allTickers, ticker:<mkt>, orderbook:<mkt>, trades:<mkt>, user.
  * Orderbook frames are throttled full snapshots ({type:'snapshot'}).
+ *
+ * `seq` is a PER-CHANNEL monotonic counter (NOT the global engine seq): every
+ * broadcast to a given channel increments that channel's counter by exactly 1,
+ * so a client can detect a dropped frame on its own channel as a gap. The very
+ * first frame a (re)subscriber receives is a fresh snapshot carrying the
+ * channel's current seq plus `reset:true`, so the client resets its expectation
+ * instead of seeing a spurious gap.
  */
 export class WsHub implements EventSink {
   readonly #conns = new Set<Conn>();
@@ -57,6 +64,8 @@ export class WsHub implements EventSink {
   readonly #tickers = new Map<string, unknown>();
   #tickerQueue = new Map<string, unknown>();
   readonly #dirtyBooks = new Set<string>();
+  /** per-channel monotonic frame counter, stamped onto every outbound frame */
+  readonly #channelSeq = new Map<string, number>();
   /** markets whose source venue feed is stale/down — book is NOT live data */
   readonly #staleMarkets = new Set<string>();
   #bookTimer: ReturnType<typeof setTimeout> | null = null;
@@ -317,42 +326,65 @@ export class WsHub implements EventSink {
     };
   }
 
+  /** Bump and return the next per-channel frame seq (starts at 1). */
+  #nextSeq(channel: string): number {
+    const next = (this.#channelSeq.get(channel) ?? 0) + 1;
+    this.#channelSeq.set(channel, next);
+    return next;
+  }
+
+  /** Current per-channel seq (the last value broadcast, or 0 if none yet). */
+  #currentSeq(channel: string): number {
+    return this.#channelSeq.get(channel) ?? 0;
+  }
+
   #broadcastBook(marketId: string): void {
     const channel = `orderbook:${marketId}`;
     if (![...this.#conns].some((c) => c.channels.has(channel))) return;
-    const data = this.#bookData(marketId);
-    this.#broadcast(channel, data, data['seq'] as number);
+    this.#broadcast(channel, this.#bookData(marketId));
   }
 
   #sendInitial(conn: Conn, channel: string): void {
     if (channel === 'allTickers') {
       const all = [...this.#tickers.values()];
-      if (all.length > 0) this.#send(conn, { channel, data: all });
+      if (all.length > 0) this.#sendSnapshot(conn, channel, all);
     } else if (channel.startsWith('ticker:')) {
       const t = this.#tickers.get(channel.slice('ticker:'.length));
-      if (t !== undefined) this.#send(conn, { channel, data: t });
+      if (t !== undefined) this.#sendSnapshot(conn, channel, t);
     } else if (channel.startsWith('orderbook:')) {
       const marketId = channel.slice('orderbook:'.length);
       if (this.#engine.getMarket(marketId)) {
-        const data = this.#bookData(marketId);
-        this.#send(conn, { channel, data, seq: data['seq'] as number });
+        this.#sendSnapshot(conn, channel, this.#bookData(marketId));
       }
     } else if (channel.startsWith('trades:')) {
       const ring = this.#tradeRing.get(channel.slice('trades:'.length));
-      if (ring && ring.length > 0) this.#send(conn, { channel, data: ring });
+      if (ring && ring.length > 0) this.#sendSnapshot(conn, channel, ring);
     }
   }
 
+  /**
+   * Fresh-snapshot frame for a (re)subscriber: carries the channel's CURRENT
+   * per-channel seq (not a new one — this snapshot is not a new broadcast) plus
+   * `reset:true` so the client resets its gap-detection baseline rather than
+   * treating the jump from its previous seq as a dropped frame.
+   */
+  #sendSnapshot(conn: Conn, channel: string, data: unknown): void {
+    this.#send(conn, { channel, data, seq: this.#currentSeq(channel), reset: true });
+  }
+
   #sendUser(userId: string, data: unknown): void {
+    let seq: number | undefined;
     for (const c of this.#conns) {
       if (c.userId === userId && c.channels.has('user')) {
-        this.#send(c, { channel: 'user', data });
+        if (seq === undefined) seq = this.#nextSeq('user');
+        this.#send(c, { channel: 'user', data, seq });
       }
     }
   }
 
-  #broadcast(channel: string, data: unknown, seq?: number): void {
-    const frame = JSON.stringify(seq === undefined ? { channel, data } : { channel, data, seq });
+  #broadcast(channel: string, data: unknown): void {
+    const seq = this.#nextSeq(channel);
+    const frame = JSON.stringify({ channel, data, seq });
     for (const c of this.#conns) {
       if (c.channels.has(channel)) {
         try {
@@ -364,7 +396,7 @@ export class WsHub implements EventSink {
     }
   }
 
-  #send(conn: Conn, frame: { channel: string; data: unknown; seq?: number }): void {
+  #send(conn: Conn, frame: { channel: string; data: unknown; seq?: number; reset?: boolean }): void {
     try {
       conn.socket.send(JSON.stringify(frame));
     } catch {
