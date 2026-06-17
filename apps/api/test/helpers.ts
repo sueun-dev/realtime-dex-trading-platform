@@ -106,7 +106,7 @@ export async function loginAndFund(app: FastifyInstance): Promise<TestUser> {
 export async function authed(
   app: FastifyInstance,
   user: TestUser,
-  method: 'GET' | 'POST' | 'DELETE',
+  method: 'GET' | 'POST' | 'DELETE' | 'PATCH',
   url: string,
   payload?: unknown,
 ): Promise<Awaited<ReturnType<FastifyInstance['inject']>>> {

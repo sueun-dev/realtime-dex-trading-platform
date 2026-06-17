@@ -430,3 +430,69 @@ describe('spot matching', () => {
     expect(te.takerOrder.status).toBe('filled');
   });
 });
+
+describe('amend (cancel-replace) a resting GTC limit order', () => {
+  function restingBid(): { ex: Exchange; t: ConservationTracker; id: string } {
+    const { ex, t } = setup();
+    // alice rests a buy 0.01 @ 50,000,000 (tick 1,000)
+    const id = acceptedId(ex.submitOrder('alice', req(M, 'buy', 'limit', u(50_000_000), u('0.01')), TS++));
+    return { ex, t, id };
+  }
+  const lockedKRW = (ex: Exchange) => ex.getBalances('alice').find((b) => b.asset === 'KRW')!.locked;
+
+  it('amends the price: old order gone, new resting order at the new price, lock adjusted, conserved', () => {
+    const { ex, t, id } = restingBid();
+    const before = lockedKRW(ex);
+    const evts = ex.amendOrder('alice', id, { price: u(49_000_000) }, TS++);
+    // old cancelled, new accepted
+    expect(evts.some((e) => e.kind === 'orderCancelled' && e.orderId === id)).toBe(true);
+    const accepted = evts.filter((e) => e.kind === 'orderAccepted');
+    expect(accepted).toHaveLength(1);
+    expect(ex.getOrder(id)!.status).toBe('cancelled');
+    const book = ex.getOrderbook(M);
+    expect(book.bids).toEqual([{ price: u(49_000_000), qty: u('0.01') }]);
+    // lower price → smaller lock
+    expect(lockedKRW(ex) < before).toBe(true);
+    t.check(ex);
+  });
+
+  it('amends the qty up (still affordable); conservation holds', () => {
+    const { ex, t, id } = restingBid();
+    ex.amendOrder('alice', id, { qty: u('0.02') }, TS++);
+    expect(ex.getOrderbook(M).bids).toEqual([{ price: u(50_000_000), qty: u('0.02') }]);
+    t.check(ex);
+  });
+
+  it('an unaffordable amend throws and leaves the original order untouched', () => {
+    const { ex, t, id } = restingBid();
+    const lockBefore = lockedKRW(ex);
+    // 100 BTC @ 50,000,000 = 5,000,000,000,000 KRW » alice's 100,000,000
+    expect(() => ex.amendOrder('alice', id, { qty: u(100) }, TS++)).toThrow(/insufficient/i);
+    // original bid is intact
+    expect(ex.getOrder(id)!.status).toBe('open');
+    expect(ex.getOrderbook(M).bids).toEqual([{ price: u(50_000_000), qty: u('0.01') }]);
+    expect(lockedKRW(ex)).toBe(lockBefore);
+    t.check(ex);
+  });
+
+  it('an amend that crosses the book fills immediately', () => {
+    const { ex, t, id } = restingBid();
+    // bob rests an ask at 51,000,000
+    ex.submitOrder('bob', req(M, 'sell', 'limit', u(51_000_000), u('0.01')), TS++);
+    // alice amends her bid UP to 52,000,000 → crosses bob's ask → fills at 51,000,000
+    const evts = ex.amendOrder('alice', id, { price: u(52_000_000) }, TS++);
+    expect(trades(evts)).toHaveLength(1);
+    expect(trades(evts)[0]!.price).toBe(u(51_000_000));
+    expect(ex.getOrderbook(M).bids).toEqual([]); // fully filled, nothing rests
+    t.check(ex);
+  });
+
+  it('rejects amending a non-GTC-limit order', () => {
+    const { ex } = restingBid();
+    // a market order never rests, so make a postOnly resting order and try to amend it
+    const pid = acceptedId(
+      ex.submitOrder('alice', req(M, 'buy', 'limit', u(48_000_000), u('0.01'), { postOnly: true }), TS++),
+    );
+    expect(() => ex.amendOrder('alice', pid, { price: u(47_000_000) }, TS++)).toThrow(/amend supports only/i);
+  });
+});

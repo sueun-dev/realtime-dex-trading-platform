@@ -8,6 +8,7 @@ import {
   mulUnits,
   parseOrderRequest,
   roundToTick,
+  zPositiveUnits,
   type EngineEvent,
   type ErrorCode,
   type Order,
@@ -109,6 +110,26 @@ export function registerOrderRoutes(
     const { id } = req.params as { id: string };
     await pipeline.exec(() => engine.cancelOrder(req.userId, id, Date.now()));
     return { ok: true };
+  });
+
+  // amend (cancel-replace) a resting GTC limit order's price and/or qty
+  app.patch('/api/orders/:id', { preHandler: authenticate }, async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { price?: unknown; qty?: unknown };
+    const changes: { price?: bigint; qty?: bigint } = {};
+    if (body.price !== undefined) changes.price = zPositiveUnits.parse(body.price);
+    if (body.qty !== undefined) changes.qty = zPositiveUnits.parse(body.qty);
+    if (changes.price === undefined && changes.qty === undefined) {
+      throw new DexError('INVALID_ORDER', 'amend requires a new price and/or qty');
+    }
+    const outcome = await pipeline.run(() => {
+      const events = engine.amendOrder(req.userId, id, changes, Date.now());
+      return [events, events] as const;
+    });
+    const accepted = [...outcome].reverse().find((e) => e.kind === 'orderAccepted');
+    if (!accepted) throw new DexError('INTERNAL', 'amend produced no order');
+    const live = engine.getOrder(accepted.order.id);
+    return jsonSafe(live ?? finalOrderState(outcome, accepted.order));
   });
 
   app.get('/api/orders', { preHandler: authenticate }, async (req) => {

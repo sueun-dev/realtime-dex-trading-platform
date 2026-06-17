@@ -404,3 +404,44 @@ describe('order validation (engine + zod, exact error codes)', () => {
     }
   });
 });
+
+describe('amend (PATCH) a resting order', () => {
+  it('changes a resting bid price atomically; unaffordable amend 400s and keeps the original', async () => {
+    const a = await makeApp();
+    try {
+      const user = await loginAndFund(a.app);
+      const place = await placeOrder(a.app, user, {
+        marketId: TEST_SPOT.id,
+        side: 'buy',
+        type: 'limit',
+        price: '50',
+        qty: '1',
+        tif: 'GTC',
+      });
+      const id = (place.json() as { id: string }).id;
+
+      // amend price 50 -> 40
+      const amend = await authed(a.app, user, 'PATCH', `/api/orders/${id}`, { price: '40' });
+      expect(amend.statusCode).toBe(200);
+      const newOrder = amend.json() as { id: string; price: string; status: string };
+      expect(newOrder.price).toBe('40');
+      expect(newOrder.status).toBe('open');
+      expect(newOrder.id).not.toBe(id); // cancel-replace → new id
+
+      const book = (
+        await a.app.inject({ method: 'GET', url: `/api/markets/${TEST_SPOT.id}/orderbook` })
+      ).json() as { bids: { price: string; qty: string }[] };
+      expect(book.bids).toEqual([{ price: '40', qty: '1' }]);
+
+      // an unaffordable amend (qty 1e9) is rejected and the order is untouched
+      const bad = await authed(a.app, user, 'PATCH', `/api/orders/${newOrder.id}`, { qty: '1000000000' });
+      expect(bad.statusCode).toBe(400);
+      const stillThere = (
+        await a.app.inject({ method: 'GET', url: `/api/markets/${TEST_SPOT.id}/orderbook` })
+      ).json() as { bids: { price: string; qty: string }[] };
+      expect(stillThere.bids).toEqual([{ price: '40', qty: '1' }]);
+    } finally {
+      await a.stop();
+    }
+  });
+});

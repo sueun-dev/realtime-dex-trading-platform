@@ -987,6 +987,66 @@ export class Exchange {
     return evts;
   }
 
+  /**
+   * Amend (cancel-replace) a resting GTC limit order's price and/or qty
+   * atomically: the new order is fully PRE-VALIDATED (tick / lot / minNotional /
+   * affordability accounting for the old lock being released) BEFORE the old is
+   * cancelled, so a rejected amend leaves the original order untouched. The
+   * replacement is a fresh order (new id) placed through submitOrder; for a
+   * GTC limit it can only rest or fill, never reject, so the operation is safe.
+   * Restricted to plain GTC limit orders (use cancel + place for the rest).
+   */
+  amendOrder(userId: string, orderId: string, changes: { price?: bigint; qty?: bigint }, ts: number): EngineEvent[] {
+    const o = this.orders.get(orderId);
+    if (!o || o.status !== 'open' || !o.resting) {
+      throw new DexError('ORDER_NOT_FOUND', `order ${orderId} not found or not open`);
+    }
+    if (o.userId !== userId) throw new DexError('NOT_AUTHORIZED', `order ${orderId} belongs to another user`);
+    if (o.type !== 'limit' || o.tif !== 'GTC' || o.postOnly) {
+      throw new DexError('INVALID_ORDER', 'amend supports only resting GTC limit orders');
+    }
+    const ms = this.markets.get(o.marketId)!;
+    const m = ms.config;
+    const newPrice = changes.price ?? o.price!;
+    const newQty = changes.qty ?? o.qty;
+    if (newPrice <= 0n || !isMultipleOf(newPrice, m.tickSize)) throw new DexError('TICK_SIZE', 'price not a tick multiple');
+    if (newQty <= 0n || !isMultipleOf(newQty, m.lotSize)) throw new DexError('LOT_SIZE', 'qty not a lot multiple');
+    if (mulUnits(newPrice, newQty) < m.minNotional) throw new DexError('MIN_NOTIONAL', 'order notional below minimum');
+
+    // affordability with the old order's lock released back into available
+    const leverage = m.type === 'perp' ? this.leverageOf(userId, o.marketId) : 1;
+    let lockAsset: string | null = null;
+    let newLock = 0n;
+    if (m.type === 'spot') {
+      lockAsset = o.side === 'buy' ? m.quote : m.base;
+      newLock = o.side === 'buy' ? spotBuyLock(newPrice, newQty, m.takerFeeBps) : spotSellLock(newQty);
+    } else if (!o.reduceOnly) {
+      lockAsset = m.quote;
+      newLock = perpLock(newPrice, newQty, leverage, m.takerFeeBps);
+    }
+    if (lockAsset !== null) {
+      const releasable = o.lockAsset === lockAsset ? o.lockRemaining : 0n;
+      if (this.ledger.available(userId, lockAsset) + releasable < newLock) {
+        throw new DexError(m.type === 'spot' ? 'INSUFFICIENT_BALANCE' : 'INSUFFICIENT_MARGIN', 'insufficient balance for amended order');
+      }
+    }
+
+    const evts: EngineEvent[] = [];
+    this.cancelInternal(ms, o, 'user', evts, ts); // releases the old lock
+    const replacement: OrderRequest = {
+      marketId: o.marketId,
+      side: o.side,
+      type: 'limit',
+      price: newPrice,
+      qty: newQty,
+      tif: 'GTC',
+      postOnly: false,
+      reduceOnly: o.reduceOnly,
+    };
+    evts.push(...this.submitOrder(userId, replacement, ts));
+    return evts;
+  }
+
   // ------------------------------------------------------- leverage and mark
 
   setLeverage(userId: string, marketId: string, leverage: number, ts: number): void {
