@@ -90,3 +90,29 @@ test('closes the position at market (reduce-only)', async () => {
   const fills = page.locator('.data-table tbody tr').filter({ hasText: 'BTC-PERP' });
   expect(await fills.count()).toBeGreaterThanOrEqual(2);
 });
+
+test('places a stop / trigger order and sees it in open orders, then cancels it', async () => {
+  const form = page.getByTestId('order-form');
+  // a breakout buy stop: dormant until the mark rises through 90,000 (well above
+  // the live ~$65k mark), using the default buy direction (이상/above) so it
+  // rests UNtriggered without depending on the direction toggle.
+  await form.getByRole('button', { name: '지정가' }).click();
+  await form.getByPlaceholder('가격').fill('90000');
+  await form.getByPlaceholder('수량').fill('0.001');
+  await form.getByText(/트리거 주문/).click();
+  await expect(form.getByLabel('트리거 가격')).toBeVisible(); // section opened
+  await form.getByLabel('트리거 가격').fill('90000');
+  await form.getByRole('button', { name: /매수 BTC/ }).click();
+  await expectToast(page, '주문이 접수되었습니다');
+
+  // it shows in 미체결 주문 with a 트리거 badge
+  await openTab('미체결 주문');
+  const badge = page.locator('[data-testid^="trigger-badge-"]').first();
+  await expect(badge).toBeVisible({ timeout: 10_000 });
+  await expect(badge).toContainText('트리거');
+
+  // cancel it
+  const row = page.locator('.data-table tbody tr').filter({ has: badge });
+  await row.getByRole('button', { name: '취소' }).click();
+  await expect(page.locator('[data-testid^="trigger-badge-"]')).toHaveCount(0, { timeout: 10_000 });
+});
