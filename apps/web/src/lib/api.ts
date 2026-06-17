@@ -8,6 +8,9 @@ import type { CandleInterval, MarketType, OrderStatus, OrderType, Side, TimeInFo
 
 export const API_BASE = '/api';
 
+/** A conditional order fires when the market price moves above/below the trigger. */
+export type TriggerDirection = 'above' | 'below';
+
 // ---------------------------------------------------------------------------
 // auth token plumbing (registered by lib/auth.ts to avoid an import cycle)
 // ---------------------------------------------------------------------------
@@ -177,6 +180,11 @@ export interface AccountWire {
   marginUsed: string;
 }
 
+export interface TriggerWire {
+  price: string;
+  direction: TriggerDirection;
+}
+
 export interface OrderWire {
   id: string;
   marketId: string;
@@ -189,6 +197,7 @@ export interface OrderWire {
   tif: TimeInForce;
   postOnly: boolean;
   reduceOnly: boolean;
+  trigger?: TriggerWire | null;
   ts: number;
 }
 
@@ -207,11 +216,15 @@ export interface PlaceOrderBody {
   marketId: string;
   side: Side;
   type: OrderType;
-  price: string;
+  /** Omitted for a stop-MARKET order — the engine derives the bound at activation. */
+  price?: string;
   qty: string;
   tif: TimeInForce;
   postOnly?: boolean;
   reduceOnly?: boolean;
+  /** Conditional (stop/take-profit) trigger price — must be sent with triggerDirection. */
+  triggerPrice?: string;
+  triggerDirection?: TriggerDirection;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +264,11 @@ export interface PositionData {
   margin: bigint;
 }
 
+export interface TriggerData {
+  price: bigint;
+  direction: TriggerDirection;
+}
+
 export interface OrderData {
   id: string;
   marketId: string;
@@ -263,6 +281,8 @@ export interface OrderData {
   tif: TimeInForce;
   postOnly: boolean;
   reduceOnly: boolean;
+  /** Non-null only for conditional orders (status 'untriggered' until it fires). */
+  trigger: TriggerData | null;
   ts: number;
 }
 
@@ -322,6 +342,10 @@ export function parsePosition(w: PositionWire): PositionData {
 }
 
 export function parseOrder(w: OrderWire): OrderData {
+  const trigger =
+    w.trigger === null || w.trigger === undefined
+      ? null
+      : { price: toUnits(w.trigger.price), direction: w.trigger.direction };
   return {
     id: w.id,
     marketId: w.marketId,
@@ -334,6 +358,7 @@ export function parseOrder(w: OrderWire): OrderData {
     tif: w.tif,
     postOnly: w.postOnly,
     reduceOnly: w.reduceOnly,
+    trigger,
     ts: w.ts,
   };
 }

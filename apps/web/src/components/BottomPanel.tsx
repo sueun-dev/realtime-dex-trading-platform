@@ -147,13 +147,31 @@ export function OpenOrdersTable() {
       <tbody>
         {orders.map((o) => {
           const tickSize = byId[o.marketId]?.tickSize ?? 1n;
+          const trigger = o.trigger;
           return (
             <tr key={o.id}>
               <td className="dim">{formatTime(o.ts)}</td>
               <td>{o.marketId}</td>
               <td className={o.side === 'buy' ? 'pos' : 'neg'}>{o.side === 'buy' ? '매수' : '매도'}</td>
-              <td>{o.type === 'limit' ? '지정가' : '시장가'}</td>
-              <td>{o.price !== null ? formatPrice(o.price, tickSize) : '시장가'}</td>
+              <td>
+                {o.type === 'limit' ? '지정가' : '시장가'}
+                {trigger !== null && (
+                  <span className="badge mini trigger" data-testid={`trigger-badge-${o.id}`}>
+                    트리거
+                  </span>
+                )}
+              </td>
+              <td>
+                {trigger !== null ? (
+                  <span className="trigger-cond" data-testid={`trigger-cond-${o.id}`}>
+                    {trigger.direction === 'above' ? '≥' : '≤'} {formatPrice(trigger.price, tickSize)}
+                  </span>
+                ) : o.price !== null ? (
+                  formatPrice(o.price, tickSize)
+                ) : (
+                  '시장가'
+                )}
+              </td>
               <td>{formatQty(o.qty)}</td>
               <td>{formatQty(o.filledQty)}</td>
               <td>

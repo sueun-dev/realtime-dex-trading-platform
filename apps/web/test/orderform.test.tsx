@@ -201,6 +201,80 @@ describe('OrderForm submission', () => {
     });
   });
 
+  it('submits a stop-MARKET sell with triggerPrice/triggerDirection and NO price', async () => {
+    seedSpot();
+    renderWithQuery(
+      <>
+        <OrderForm />
+        <Toasts />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '매도' }));
+    fireEvent.click(screen.getByRole('button', { name: '시장가' }));
+    fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '0.5' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '트리거 주문 (스탑/익절)' }));
+    fireEvent.change(screen.getByLabelText('트리거 가격'), { target: { value: '90000' } });
+    fireEvent.click(screen.getByRole('button', { name: '매도 BTC' }));
+
+    expect(await screen.findByText('주문이 접수되었습니다')).toBeInTheDocument();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      marketId: 'BTC-USDC',
+      side: 'sell',
+      type: 'market',
+      qty: '0.5',
+      tif: 'IOC',
+      triggerPrice: '90000',
+      triggerDirection: 'below', // sell default = stop-loss
+    });
+  });
+
+  it('submits a stop-LIMIT buy with a tick-aligned trigger and above direction', async () => {
+    seedSpot();
+    renderWithQuery(
+      <>
+        <OrderForm />
+        <Toasts />
+      </>,
+    );
+    fireEvent.change(screen.getByPlaceholderText('가격'), { target: { value: '100000' } });
+    fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '트리거 주문 (스탑/익절)' }));
+    // BTC tick size is 1, so 99000.4 rounds to 99000
+    fireEvent.change(screen.getByLabelText('트리거 가격'), { target: { value: '99000.4' } });
+    fireEvent.click(screen.getByRole('button', { name: '매수 BTC' }));
+
+    expect(await screen.findByText('주문이 접수되었습니다')).toBeInTheDocument();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      marketId: 'BTC-USDC',
+      side: 'buy',
+      type: 'limit',
+      price: '100000',
+      qty: '1',
+      tif: 'GTC',
+      postOnly: false,
+      triggerPrice: '99000', // tick-aligned
+      triggerDirection: 'above', // buy default
+    });
+  });
+
+  it('rejects a trigger order with no trigger price', async () => {
+    seedSpot();
+    renderWithQuery(
+      <>
+        <OrderForm />
+        <Toasts />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '시장가' }));
+    fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '트리거 주문 (스탑/익절)' }));
+    fireEvent.click(screen.getByRole('button', { name: '매수 BTC' }));
+    expect(await screen.findByText('트리거 가격을 입력해주세요')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('maps API error codes to Korean toasts', async () => {
     seedSpot();
     fetchMock.mockResolvedValueOnce(errJson(422, 'INSUFFICIENT_BALANCE'));

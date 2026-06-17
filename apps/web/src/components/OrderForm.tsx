@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { divRound, feeOn, fromUnits, mulDiv, mulUnits, roundToLot, roundToTick, toUnits } from '@dex/shared';
 import type { OrderType, Side, TimeInForce } from '@dex/shared';
 import { api, koMessage } from '../lib/api.js';
-import type { PlaceOrderBody } from '../lib/api.js';
+import type { PlaceOrderBody, TriggerDirection } from '../lib/api.js';
 import { formatAmount, formatQty } from '../lib/format.js';
 import { useAuthStore } from '../lib/auth.js';
 import { useBookStore } from '../stores/book.js';
@@ -54,6 +54,11 @@ export function OrderForm() {
   const [leverage, setLeverage] = useState(1);
   const [reduceOnly, setReduceOnly] = useState(false);
   const [postOnly, setPostOnly] = useState(false);
+  const [triggerOn, setTriggerOn] = useState(false);
+  const [triggerStr, setTriggerStr] = useState('');
+  // null = user hasn't overridden, so the direction follows the side default
+  // (sell → below = stop-loss, buy → above = stop-buy).
+  const [triggerDir, setTriggerDir] = useState<TriggerDirection | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const leverageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -64,6 +69,9 @@ export function OrderForm() {
     setLeverage(1);
     setReduceOnly(false);
     setPostOnly(false);
+    setTriggerOn(false);
+    setTriggerStr('');
+    setTriggerDir(null);
   }, [marketId, setPriceStr]);
 
   useEffect(
@@ -90,6 +98,11 @@ export function OrderForm() {
 
   const availableAsset = !isPerp && side === 'sell' ? market.base : market.quote;
   const available = balances[availableAsset]?.available ?? 0n;
+
+  // Default: sell → stop-loss (below), buy → stop-buy / breakout (above). The
+  // user can override via the selector; once overridden we keep their choice.
+  const defaultTriggerDir: TriggerDirection = side === 'sell' ? 'below' : 'above';
+  const effectiveTriggerDir = triggerDir ?? defaultTriggerDir;
 
   const applyPct = (pct: number): void => {
     if (!isPerp && side === 'sell') {
@@ -140,7 +153,22 @@ export function OrderForm() {
       return;
     }
 
-    let price: bigint;
+    // A conditional (stop/take-profit) order needs a tick-valid trigger price.
+    let triggerPrice: bigint | null = null;
+    if (triggerOn) {
+      const parsed = parseUnitsSafe(triggerStr);
+      if (parsed === null || parsed <= 0n) {
+        toast.error('트리거 가격을 입력해주세요');
+        return;
+      }
+      triggerPrice = roundToTick(parsed, market.tickSize, 'half-up');
+      if (triggerPrice <= 0n) {
+        toast.error('트리거 가격을 입력해주세요');
+        return;
+      }
+    }
+
+    let price: bigint | null;
     let tif: TimeInForce;
     if (type === 'limit') {
       if (limitPrice === null || limitPrice <= 0n) {
@@ -149,6 +177,10 @@ export function OrderForm() {
       }
       price = limitPrice;
       tif = 'GTC';
+    } else if (triggerOn) {
+      // stop-MARKET: send NO price — the engine derives the bound at activation.
+      price = null;
+      tif = 'IOC';
     } else {
       // market order: IOC with a best±5% slippage bound, tick-aligned
       const base = side === 'buy' ? bestAsk : bestBid;
@@ -164,12 +196,16 @@ export function OrderForm() {
       marketId: market.id,
       side,
       type,
-      price: fromUnits(price),
       qty: fromUnits(qty),
       tif,
     };
+    if (price !== null) body.price = fromUnits(price);
     if (type === 'limit' && !isPerp) body.postOnly = postOnly;
     if (isPerp) body.reduceOnly = reduceOnly;
+    if (triggerPrice !== null) {
+      body.triggerPrice = fromUnits(triggerPrice);
+      body.triggerDirection = effectiveTriggerDir;
+    }
 
     setSubmitting(true);
     try {
@@ -288,6 +324,53 @@ export function OrderForm() {
           </label>
         )
       )}
+
+      <div className="trigger-section">
+        <label className="check trigger-toggle">
+          <input
+            type="checkbox"
+            checked={triggerOn}
+            onChange={(e) => setTriggerOn(e.target.checked)}
+          />
+          <span>트리거 주문 (스탑/익절)</span>
+        </label>
+        {triggerOn && (
+          <div className="trigger-body">
+            <label className="field">
+              <span className="field-label dim">트리거 가격 ({market.quote})</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="트리거 가격"
+                aria-label="트리거 가격"
+                value={triggerStr}
+                onChange={(e) => setTriggerStr(e.target.value)}
+              />
+            </label>
+            <div className="trigger-dir" role="group" aria-label="트리거 방향">
+              <button
+                type="button"
+                aria-pressed={effectiveTriggerDir === 'above'}
+                className={`trigger-dir-btn ${effectiveTriggerDir === 'above' ? 'active' : ''}`}
+                onClick={() => setTriggerDir('above')}
+              >
+                이상 ↑
+              </button>
+              <button
+                type="button"
+                aria-pressed={effectiveTriggerDir === 'below'}
+                className={`trigger-dir-btn ${effectiveTriggerDir === 'below' ? 'active' : ''}`}
+                onClick={() => setTriggerDir('below')}
+              >
+                이하 ↓
+              </button>
+            </div>
+            <p className="trigger-hint dim">
+              시장가가 트리거 {effectiveTriggerDir === 'above' ? '이상' : '이하'}일 때 주문이 활성화됩니다
+            </p>
+          </div>
+        )}
+      </div>
 
       <div className="summary">
         <div className="summary-row">
