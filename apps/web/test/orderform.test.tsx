@@ -288,6 +288,34 @@ describe('OrderForm submission', () => {
     });
   });
 
+  it('submits a perp bracket (market entry + TP/SL) to /api/bracket (gap #6)', async () => {
+    seedMarkets([PERP_BTC], 'BTC-PERP');
+    useUserStore.setState({ balances: { USDC: { available: toUnits('100000'), locked: 0n } } });
+    useAuthStore.setState({ address: '0xabc', token: 'test-token', status: 'connected' });
+    renderWithQuery(
+      <>
+        <OrderForm />
+        <Toasts />
+      </>,
+    );
+    fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '브래킷 (시장가 진입 + TP/SL)' }));
+    fireEvent.change(screen.getByLabelText('이익실현 가격'), { target: { value: '110' } });
+    fireEvent.change(screen.getByLabelText('손절 가격'), { target: { value: '90' } });
+    fireEvent.click(screen.getByRole('button', { name: '매수 BTC' }));
+
+    expect(await screen.findByText('브래킷 주문이 접수되었습니다')).toBeInTheDocument();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/bracket');
+    expect(JSON.parse(init.body as string)).toEqual({
+      marketId: 'BTC-PERP',
+      side: 'buy',
+      qty: '1',
+      takeProfitPrice: '110',
+      stopLossPrice: '90',
+    });
+  });
+
   it('submits a TWAP parent order to /api/twap with slices + duration (gap #3)', async () => {
     seedSpot();
     renderWithQuery(

@@ -138,6 +138,21 @@ export const zTwapRequest = z
 
 export type TwapRequestInput = z.input<typeof zTwapRequest>;
 
+/**
+ * A bracket order: a market entry plus an OCO take-profit / stop-loss pair that
+ * protect the resulting position. takeProfitPrice/stopLossPrice are exit prices;
+ * the engine fills the entry, then attaches the reduce-only TP limit + SL stop.
+ */
+export const zBracketRequest = z.object({
+  marketId: zMarketId,
+  side: zSide,
+  qty: zPositiveUnits,
+  takeProfitPrice: zPositiveUnits,
+  stopLossPrice: zPositiveUnits,
+});
+
+export type BracketRequestInput = z.input<typeof zBracketRequest>;
+
 export const zAuthNonceRequest = z.object({ address: zEthAddress });
 export const zAuthVerifyRequest = z.object({
   address: zEthAddress,

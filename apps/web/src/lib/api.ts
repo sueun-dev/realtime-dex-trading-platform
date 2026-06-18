@@ -253,6 +253,14 @@ export interface TwapBody {
   reduceOnly?: boolean;
 }
 
+export interface BracketBody {
+  marketId: string;
+  side: Side;
+  qty: string;
+  takeProfitPrice: string;
+  stopLossPrice: string;
+}
+
 export interface TwapWire {
   id: string;
   marketId: string;
@@ -546,5 +554,8 @@ export const api = {
   },
   cancelTwap(id: string): Promise<unknown> {
     return apiFetch<unknown>(`/twap/${id}`, { method: 'DELETE' });
+  },
+  createBracket(body: BracketBody): Promise<unknown> {
+    return apiFetch<unknown>('/bracket', { method: 'POST', body });
   },
 };

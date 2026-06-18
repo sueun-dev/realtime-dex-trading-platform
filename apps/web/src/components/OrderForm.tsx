@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { divRound, feeOn, fromUnits, mulDiv, mulUnits, roundToLot, roundToTick, toUnits } from '@dex/shared';
 import type { OrderType, Side, TimeInForce } from '@dex/shared';
 import { api, koMessage } from '../lib/api.js';
-import type { PlaceOrderBody, TriggerDirection, TwapBody } from '../lib/api.js';
+import type { BracketBody, PlaceOrderBody, TriggerDirection, TwapBody } from '../lib/api.js';
 import { formatAmount, formatQty } from '../lib/format.js';
 import { useAuthStore } from '../lib/auth.js';
 import { useBookStore } from '../stores/book.js';
@@ -61,6 +61,9 @@ export function OrderForm() {
   const [twapOn, setTwapOn] = useState(false);
   const [twapSlices, setTwapSlices] = useState('5');
   const [twapMinutes, setTwapMinutes] = useState('30');
+  const [bracketOn, setBracketOn] = useState(false);
+  const [tpStr, setTpStr] = useState('');
+  const [slStr, setSlStr] = useState('');
   // null = user hasn't overridden, so the direction follows the side default
   // (sell → below = stop-loss, buy → above = stop-buy).
   const [triggerDir, setTriggerDir] = useState<TriggerDirection | null>(null);
@@ -193,6 +196,46 @@ export function OrderForm() {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['twaps'] }),
           queryClient.invalidateQueries({ queryKey: ['account'] }),
+        ]);
+      } catch (e) {
+        toast.error(koMessage(e));
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // Bracket: a market entry plus an OCO take-profit / stop-loss pair (perp only)
+    if (bracketOn) {
+      if (!isPerp) {
+        toast.error('브래킷 주문은 무기한 선물에서만 가능합니다');
+        return;
+      }
+      const tp = parseUnitsSafe(tpStr);
+      const sl = parseUnitsSafe(slStr);
+      if (tp === null || tp <= 0n) {
+        toast.error('이익실현 가격을 입력해주세요');
+        return;
+      }
+      if (sl === null || sl <= 0n) {
+        toast.error('손절 가격을 입력해주세요');
+        return;
+      }
+      const bbody: BracketBody = {
+        marketId: market.id,
+        side,
+        qty: fromUnits(qty),
+        takeProfitPrice: fromUnits(roundToTick(tp, market.tickSize, 'half-up')),
+        stopLossPrice: fromUnits(roundToTick(sl, market.tickSize, 'half-up')),
+      };
+      setSubmitting(true);
+      try {
+        await api.createBracket(bbody);
+        toast.success('브래킷 주문이 접수되었습니다');
+        setQtyStr('');
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['account'] }),
+          queryClient.invalidateQueries({ queryKey: ['orders'] }),
         ]);
       } catch (e) {
         toast.error(koMessage(e));
@@ -425,7 +468,47 @@ export function OrderForm() {
         )}
       </div>
 
-      {!twapOn && (
+      {isPerp && !twapOn && (
+        <div className="trigger-section">
+          <label className="check trigger-toggle">
+            <input
+              type="checkbox"
+              checked={bracketOn}
+              onChange={(e) => setBracketOn(e.target.checked)}
+            />
+            <span>브래킷 (시장가 진입 + TP/SL)</span>
+          </label>
+          {bracketOn && (
+            <div className="trigger-body">
+              <label className="field">
+                <span className="field-label dim">이익실현 가격 ({market.quote})</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  aria-label="이익실현 가격"
+                  value={tpStr}
+                  onChange={(e) => setTpStr(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label dim">손절 가격 ({market.quote})</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  aria-label="손절 가격"
+                  value={slStr}
+                  onChange={(e) => setSlStr(e.target.value)}
+                />
+              </label>
+              <p className="trigger-hint dim">
+                시장가로 진입하고 두 청산 주문(OCO)이 포지션을 보호합니다
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!twapOn && !bracketOn && (
       <div className="trigger-section">
         <label className="check trigger-toggle">
           <input

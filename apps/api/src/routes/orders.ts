@@ -8,6 +8,7 @@ import {
   mulUnits,
   parseOrderRequest,
   roundToTick,
+  zBracketRequest,
   zPositiveUnits,
   type EngineEvent,
   type ErrorCode,
@@ -157,6 +158,73 @@ export function registerOrderRoutes(
     if (!accepted) throw new DexError('INTERNAL', 'amend produced no order');
     const live = engine.getOrder(accepted.order.id);
     return jsonSafe(live ?? finalOrderState(outcome, accepted.order));
+  });
+
+  // bracket: a market entry + an OCO take-profit / stop-loss pair that protect
+  // the resulting position. Perp only (the legs are reduce-only).
+  app.post('/api/bracket', { preHandler: authenticate }, async (req) => {
+    const p = zBracketRequest.parse(req.body);
+    const m = engine.getMarket(p.marketId);
+    if (!m) throw new DexError('MARKET_NOT_FOUND', `unknown market ${p.marketId}`);
+    if (m.type !== 'perp') throw new DexError('INVALID_ORDER', 'bracket orders require a perp market');
+
+    // 1. market entry — must fill so the protective legs have a position
+    const entryReq: OrderRequest = {
+      marketId: p.marketId,
+      side: p.side,
+      type: 'market',
+      qty: p.qty,
+      tif: 'IOC',
+      price: defaultMarketBound(svc, { marketId: p.marketId, side: p.side } as OrderRequest),
+    };
+    const entryOut = await pipeline.run(() => {
+      const events = engine.submitOrder(req.userId, entryReq, Date.now());
+      return [events, events] as const;
+    });
+    const entryRej = entryOut.find((e) => e.kind === 'orderRejected');
+    if (entryRej) throw new DexError('INVALID_ORDER', `bracket entry rejected: ${entryRej.reason}`);
+    const entryAcc = entryOut.find((e) => e.kind === 'orderAccepted');
+    if (!entryAcc) throw new DexError('INTERNAL', 'bracket entry produced no order');
+    if (!entryOut.some((e) => e.kind === 'trade')) {
+      throw new DexError('INVALID_ORDER', 'bracket entry did not fill — no position to protect');
+    }
+
+    // 2. OCO exit legs: a reduce-only TP limit + reduce-only SL stop-market.
+    // (SL is a dormant conditional, so the two never double-count against the
+    // position's reduce-only budget; filling one cancels the other.)
+    const group = `br-${entryAcc.order.id}`;
+    const exitSide = p.side === 'buy' ? 'sell' : 'buy';
+    const tpReq: OrderRequest = {
+      marketId: p.marketId, side: exitSide, type: 'limit', price: p.takeProfitPrice,
+      qty: p.qty, tif: 'GTC', reduceOnly: true, ocoGroup: group,
+    };
+    const slReq: OrderRequest = {
+      marketId: p.marketId, side: exitSide, type: 'market', qty: p.qty, tif: 'IOC', reduceOnly: true,
+      trigger: { price: p.stopLossPrice, direction: p.side === 'buy' ? 'below' : 'above' },
+      ocoGroup: group,
+    };
+    const tpOut = await pipeline.run(() => {
+      const events = engine.submitOrder(req.userId, tpReq, Date.now());
+      return [events, events] as const;
+    });
+    const slOut = await pipeline.run(() => {
+      const events = engine.submitOrder(req.userId, slReq, Date.now());
+      return [events, events] as const;
+    });
+    const legState = (out: EngineEvent[]): unknown => {
+      const acc = out.find((e) => e.kind === 'orderAccepted');
+      if (!acc) {
+        const rej = out.find((e) => e.kind === 'orderRejected');
+        return rej ? { rejected: rej.reason } : null;
+      }
+      return jsonSafe(engine.getOrder(acc.order.id) ?? finalOrderState(out, acc.order));
+    };
+    return jsonSafe({
+      ocoGroup: group,
+      entry: jsonSafe(finalOrderState(entryOut, entryAcc.order)),
+      takeProfit: legState(tpOut),
+      stopLoss: legState(slOut),
+    });
   });
 
   app.get('/api/orders', { preHandler: authenticate }, async (req) => {
