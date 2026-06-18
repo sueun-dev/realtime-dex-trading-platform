@@ -44,6 +44,7 @@ import type {
   MarkPriceEvent,
   Order,
   OrderCancelledEvent,
+  OrderTriggerUpdatedEvent,
   PositionChangedEvent,
   TradeEvent,
 } from '@dex/shared';
@@ -92,6 +93,7 @@ function orderRow(o: Order): typeof s.orders.$inferInsert {
     clientOrderId: o.clientOrderId,
     triggerPrice: o.trigger ? o.trigger.price : null,
     triggerDirection: o.trigger ? o.trigger.direction : null,
+    triggerTrail: o.trigger?.trail ?? null,
     seq: o.seq,
     ts: o.ts,
   };
@@ -268,6 +270,18 @@ async function applyMarkPrice(ex: DbExecutor, e: MarkPriceEvent): Promise<void> 
     .onConflictDoUpdate({ target: s.meta.key, set: { value } });
 }
 
+async function applyOrderTriggerUpdated(
+  ex: DbExecutor,
+  e: OrderTriggerUpdatedEvent,
+): Promise<void> {
+  // a trailing stop ratcheted: persist the new stop so a restore resumes from
+  // the tightened level rather than the original placement price
+  await ex
+    .update(s.orders)
+    .set({ triggerPrice: e.triggerPrice })
+    .where(eq(s.orders.id, e.orderId));
+}
+
 async function applyEvent(ex: DbExecutor, e: EngineEvent): Promise<void> {
   switch (e.kind) {
     case 'orderAccepted': {
@@ -307,6 +321,9 @@ async function applyEvent(ex: DbExecutor, e: EngineEvent): Promise<void> {
       return;
     case 'markPrice':
       await applyMarkPrice(ex, e);
+      return;
+    case 'orderTriggerUpdated':
+      await applyOrderTriggerUpdated(ex, e);
       return;
     case 'orderRejected':
       // Rejections are never persisted (nothing changed in the engine).

@@ -364,7 +364,24 @@ export class Exchange {
       return evts;
     };
     const trig = req.trigger!;
-    if (trig.price <= 0n || !isMultipleOf(trig.price, m.tickSize)) {
+    let triggerPrice = trig.price;
+    if (trig.trail !== undefined) {
+      if (trig.trail <= 0n || !isMultipleOf(trig.trail, m.tickSize)) {
+        return reject('TICK_SIZE', 'trail distance not a positive tick multiple');
+      }
+      const ref = this.refPrice(m.id);
+      if (ref === undefined) {
+        return reject('INVALID_ORDER', 'no reference price to seed a trailing stop');
+      }
+      if (triggerPrice <= 0n) {
+        // seed the initial stop `trail` away from the current ref, on the fire side
+        triggerPrice =
+          trig.direction === 'below'
+            ? roundToTick(ref - trig.trail, m.tickSize, 'floor')
+            : roundToTick(ref + trig.trail, m.tickSize, 'ceil');
+      }
+    }
+    if (triggerPrice <= 0n || !isMultipleOf(triggerPrice, m.tickSize)) {
       return reject('TICK_SIZE', 'trigger price not a positive tick multiple');
     }
     if (req.type === 'limit' && req.price === undefined) {
@@ -406,7 +423,11 @@ export class Exchange {
       postOnly: req.postOnly === true,
       reduceOnly: req.reduceOnly === true,
       clientOrderId: req.clientOrderId ?? null,
-      trigger: { price: trig.price, direction: trig.direction },
+      trigger: {
+        price: triggerPrice,
+        direction: trig.direction,
+        ...(trig.trail !== undefined ? { trail: trig.trail } : {}),
+      },
       seq: s,
       ts,
       lockRemaining: 0n,
@@ -452,6 +473,31 @@ export class Exchange {
    */
   private activateTriggers(ms: MarketState, mark: bigint, evts: EngineEvent[], ts: number): void {
     const m = ms.config;
+    // First, ratchet any trailing stops toward the favorable side. A sell-stop
+    // ('below') raises its stop as the ref rises; a buy-stop ('above') lowers it
+    // as the ref falls. The stop only ever moves AWAY from firing, so a stop
+    // that ratchets this tick cannot also fire this tick.
+    for (const o of this.conditionalOrders.values()) {
+      const tr = o.trigger!;
+      if (o.marketId !== m.id || tr.trail === undefined) continue;
+      const candidate =
+        tr.direction === 'below'
+          ? roundToTick(mark - tr.trail, m.tickSize, 'floor')
+          : roundToTick(mark + tr.trail, m.tickSize, 'ceil');
+      const improved = tr.direction === 'below' ? candidate > tr.price : candidate < tr.price;
+      if (improved && candidate > 0n) {
+        tr.price = candidate;
+        evts.push({
+          kind: 'orderTriggerUpdated',
+          seq: this.nextSeq(),
+          ts,
+          orderId: o.id,
+          userId: o.userId,
+          marketId: m.id,
+          triggerPrice: candidate,
+        });
+      }
+    }
     const due = [...this.conditionalOrders.values()]
       .filter((o) => o.marketId === m.id && this.triggerHit(o.trigger!, mark))
       .sort((a, b) => a.seq - b.seq);

@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS orders (
   client_order_id text,
   trigger_price numeric(38,0),
   trigger_direction text,
+  trigger_trail numeric(38,0),
   seq bigint NOT NULL,
   ts bigint NOT NULL
 );

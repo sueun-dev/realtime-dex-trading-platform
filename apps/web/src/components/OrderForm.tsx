@@ -56,6 +56,8 @@ export function OrderForm() {
   const [postOnly, setPostOnly] = useState(false);
   const [triggerOn, setTriggerOn] = useState(false);
   const [triggerStr, setTriggerStr] = useState('');
+  const [trailingOn, setTrailingOn] = useState(false);
+  const [trailStr, setTrailStr] = useState('');
   // null = user hasn't overridden, so the direction follows the side default
   // (sell → below = stop-loss, buy → above = stop-buy).
   const [triggerDir, setTriggerDir] = useState<TriggerDirection | null>(null);
@@ -153,9 +155,19 @@ export function OrderForm() {
       return;
     }
 
-    // A conditional (stop/take-profit) order needs a tick-valid trigger price.
+    // A conditional order needs either a tick-valid trigger price, or — for a
+    // trailing stop — a tick-valid trail distance (the engine seeds the stop).
     let triggerPrice: bigint | null = null;
-    if (triggerOn) {
+    let trailDistance: bigint | null = null;
+    if (triggerOn && trailingOn) {
+      const parsed = parseUnitsSafe(trailStr);
+      const dist = parsed === null ? null : roundToTick(parsed, market.tickSize, 'half-up');
+      if (dist === null || dist <= 0n) {
+        toast.error('트레일 간격을 입력해주세요');
+        return;
+      }
+      trailDistance = dist;
+    } else if (triggerOn) {
       const parsed = parseUnitsSafe(triggerStr);
       if (parsed === null || parsed <= 0n) {
         toast.error('트리거 가격을 입력해주세요');
@@ -202,7 +214,10 @@ export function OrderForm() {
     if (price !== null) body.price = fromUnits(price);
     if (type === 'limit' && !isPerp) body.postOnly = postOnly;
     if (isPerp) body.reduceOnly = reduceOnly;
-    if (triggerPrice !== null) {
+    if (trailDistance !== null) {
+      body.trailDistance = fromUnits(trailDistance);
+      body.triggerDirection = effectiveTriggerDir;
+    } else if (triggerPrice !== null) {
       body.triggerPrice = fromUnits(triggerPrice);
       body.triggerDirection = effectiveTriggerDir;
     }
@@ -336,17 +351,39 @@ export function OrderForm() {
         </label>
         {triggerOn && (
           <div className="trigger-body">
-            <label className="field">
-              <span className="field-label dim">트리거 가격 ({market.quote})</span>
+            <label className="check trailing-toggle">
               <input
-                type="text"
-                inputMode="decimal"
-                placeholder="트리거 가격"
-                aria-label="트리거 가격"
-                value={triggerStr}
-                onChange={(e) => setTriggerStr(e.target.value)}
+                type="checkbox"
+                checked={trailingOn}
+                onChange={(e) => setTrailingOn(e.target.checked)}
               />
+              <span>트레일링 스탑</span>
             </label>
+            {trailingOn ? (
+              <label className="field">
+                <span className="field-label dim">트레일 간격 ({market.quote})</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="트레일 간격"
+                  aria-label="트레일 간격"
+                  value={trailStr}
+                  onChange={(e) => setTrailStr(e.target.value)}
+                />
+              </label>
+            ) : (
+              <label className="field">
+                <span className="field-label dim">트리거 가격 ({market.quote})</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="트리거 가격"
+                  aria-label="트리거 가격"
+                  value={triggerStr}
+                  onChange={(e) => setTriggerStr(e.target.value)}
+                />
+              </label>
+            )}
             <div className="trigger-dir" role="group" aria-label="트리거 방향">
               <button
                 type="button"
@@ -366,7 +403,9 @@ export function OrderForm() {
               </button>
             </div>
             <p className="trigger-hint dim">
-              시장가가 트리거 {effectiveTriggerDir === 'above' ? '이상' : '이하'}일 때 주문이 활성화됩니다
+              {trailingOn
+                ? `스탑이 시장가를 ${effectiveTriggerDir === 'above' ? '위로' : '아래로'} ${trailStr || '…'} 간격으로 따라갑니다`
+                : `시장가가 트리거 ${effectiveTriggerDir === 'above' ? '이상' : '이하'}일 때 주문이 활성화됩니다`}
             </p>
           </div>
         )}

@@ -129,6 +129,7 @@ export interface OrderBody {
   reduceOnly?: boolean;
   triggerPrice?: string;
   triggerDirection?: 'above' | 'below';
+  trailDistance?: string;
   clientOrderId?: string;
 }
 

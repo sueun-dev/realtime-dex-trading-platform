@@ -81,4 +81,47 @@ describe('stop / take-profit orders via the API', () => {
     const open = (await authed(t.app, alice, 'GET', '/api/orders')).json() as { id: string }[];
     expect(open.some((o) => o.id === id)).toBe(false);
   });
+
+  it('places a trailing stop that seeds its stop from the mark and carries the trail (gap #4)', async () => {
+    // reset the mark to 100 (earlier tests moved it); a sell trailing stop with
+    // trail 10 then seeds its stop at 90
+    await t.svc.pipeline.exec(() => t.svc.engine.setMarkPrice(M, u(100), Date.now()));
+    const res = await placeOrder(t.app, alice, {
+      marketId: M,
+      side: 'sell',
+      type: 'market',
+      qty: '1',
+      tif: 'IOC',
+      reduceOnly: true,
+      triggerDirection: 'below',
+      trailDistance: '10',
+    });
+    expect(res.statusCode).toBe(200);
+    const order = res.json() as {
+      status: string;
+      trigger: { price: string; direction: string; trail?: string } | null;
+    };
+    expect(order.status).toBe('untriggered');
+    expect(order.trigger).toEqual({ price: '90', direction: 'below', trail: '10' });
+
+    // the stop ratchets up as the mark rises (100 → 150 ⇒ stop 90 → 140)
+    await t.svc.pipeline.exec(() => t.svc.engine.setMarkPrice(M, u(150), Date.now()));
+    const open = (await authed(t.app, alice, 'GET', '/api/orders')).json() as {
+      trigger: { price: string; trail?: string } | null;
+    }[];
+    const trailing = open.find((o) => o.trigger?.trail === '10');
+    expect(trailing?.trigger?.price).toBe('140');
+  });
+
+  it('rejects trailDistance without a triggerDirection (422)', async () => {
+    const res = await placeOrder(t.app, alice, {
+      marketId: M,
+      side: 'sell',
+      type: 'market',
+      qty: '1',
+      tif: 'IOC',
+      trailDistance: '10',
+    });
+    expect(res.statusCode).toBe(422);
+  });
 });

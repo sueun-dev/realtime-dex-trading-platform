@@ -238,6 +238,8 @@ export interface PlaceOrderBody {
   /** Conditional (stop/take-profit) trigger price — must be sent with triggerDirection. */
   triggerPrice?: string;
   triggerDirection?: TriggerDirection;
+  /** Trailing-stop distance — when set, the stop trails the ref by this amount. */
+  trailDistance?: string;
 }
 
 // ---------------------------------------------------------------------------

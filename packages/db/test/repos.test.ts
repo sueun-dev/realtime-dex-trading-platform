@@ -261,6 +261,48 @@ describe('orders + trades repos', () => {
   });
 });
 
+describe('trailing-stop persistence', () => {
+  it('persists trigger trail and applies orderTriggerUpdated (ratchet) survives restore', async () => {
+    const { projector, repos } = await setup();
+    const order = mkOrder({
+      id: 'ts1',
+      userId: ALICE,
+      marketId: PERP,
+      side: 'sell',
+      type: 'market',
+      status: 'untriggered',
+      price: null,
+      qty: SCALE,
+      seq: 1,
+      ts: 1,
+      trigger: { price: 90n * SCALE, direction: 'below', trail: 10n * SCALE },
+    });
+    await projector.applyBatch([
+      { kind: 'orderAccepted', seq: 1, ts: 1, order },
+      // the stop ratcheted up to 140 as the ref rose
+      {
+        kind: 'orderTriggerUpdated',
+        seq: 2,
+        ts: 2,
+        orderId: 'ts1',
+        userId: ALICE,
+        marketId: PERP,
+        triggerPrice: 140n * SCALE,
+      },
+    ] as EngineEvent[]);
+
+    const restored = await repos.orders.byId('ts1');
+    expect(restored?.trigger).toEqual({
+      price: 140n * SCALE, // the ratcheted stop, not the original 90
+      direction: 'below',
+      trail: 10n * SCALE,
+    });
+    // and it loads as a conditional for the engine restore path
+    const state = await repos.loadRestoreState();
+    expect(state.conditionalOrders?.some((o) => o.id === 'ts1')).toBe(true);
+  });
+});
+
 describe('perpHistory repo (funding + liquidations)', () => {
   it('fundingForUser + liquidationsForUser: newest first, seq-cursor paginated', async () => {
     const { projector, repos } = await setup();

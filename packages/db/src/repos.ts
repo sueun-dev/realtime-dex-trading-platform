@@ -63,7 +63,11 @@ function toOrder(r: OrderSelect): Order {
     clientOrderId: r.clientOrderId,
     trigger:
       r.triggerPrice !== null && r.triggerDirection !== null
-        ? { price: r.triggerPrice, direction: r.triggerDirection as 'above' | 'below' }
+        ? {
+            price: r.triggerPrice,
+            direction: r.triggerDirection as 'above' | 'below',
+            ...(r.triggerTrail !== null ? { trail: r.triggerTrail } : {}),
+          }
         : null,
     seq: r.seq,
     ts: r.ts,

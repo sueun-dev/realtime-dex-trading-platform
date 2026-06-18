@@ -84,6 +84,8 @@ export const orders = pgTable(
     /** conditional (stop / take-profit) trigger; null for a normal order */
     triggerPrice: money('trigger_price'),
     triggerDirection: text('trigger_direction').$type<'above' | 'below'>(),
+    /** trailing-stop distance; null for a fixed-price trigger */
+    triggerTrail: money('trigger_trail'),
     seq: bigint('seq', { mode: 'number' }).notNull(),
     ts: bigint('ts', { mode: 'number' }).notNull(),
   },

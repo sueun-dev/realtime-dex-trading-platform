@@ -43,6 +43,8 @@ export const zOrderRequest = z
     clientOrderId: z.string().min(1).max(64).optional(),
     triggerPrice: zPositiveUnits.optional(),
     triggerDirection: z.enum(['above', 'below']).optional(),
+    /** trailing-stop distance (1e8); when set the order trails the ref price */
+    trailDistance: zPositiveUnits.optional(),
   })
   .superRefine((o, ctx) => {
     if (o.type === 'limit' && o.price === undefined) {
@@ -54,8 +56,18 @@ export const zOrderRequest = z
     if (o.type === 'market' && o.tif === 'GTC') {
       ctx.addIssue({ code: 'custom', message: 'market orders must be IOC or FOK', path: ['tif'] });
     }
-    // a trigger needs both its price and direction together
-    if ((o.triggerPrice === undefined) !== (o.triggerDirection === undefined)) {
+    // a trailing stop needs a direction; its initial stop price is optional (the
+    // engine seeds it from the current ref price when omitted)
+    if (o.trailDistance !== undefined) {
+      if (o.triggerDirection === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'trailDistance requires triggerDirection',
+          path: ['trailDistance'],
+        });
+      }
+    } else if ((o.triggerPrice === undefined) !== (o.triggerDirection === undefined)) {
+      // a non-trailing trigger needs both its price and direction together
       ctx.addIssue({
         code: 'custom',
         message: 'triggerPrice and triggerDirection must be provided together',
@@ -79,8 +91,17 @@ export function parseOrderRequest(input: unknown): OrderRequest {
   };
   if (parsed.price !== undefined) req.price = parsed.price;
   if (parsed.clientOrderId !== undefined) req.clientOrderId = parsed.clientOrderId;
-  if (parsed.triggerPrice !== undefined && parsed.triggerDirection !== undefined) {
-    req.trigger = { price: parsed.triggerPrice, direction: parsed.triggerDirection };
+  if (
+    parsed.triggerDirection !== undefined &&
+    (parsed.triggerPrice !== undefined || parsed.trailDistance !== undefined)
+  ) {
+    // price 0 is a sentinel "seed from ref" used only for a trailing stop with
+    // no explicit initial stop; the engine fills it in at placement
+    req.trigger = {
+      price: parsed.triggerPrice ?? 0n,
+      direction: parsed.triggerDirection,
+    };
+    if (parsed.trailDistance !== undefined) req.trigger.trail = parsed.trailDistance;
   }
   return req;
 }

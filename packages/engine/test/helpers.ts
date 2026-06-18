@@ -58,7 +58,7 @@ export function req(
     postOnly?: boolean;
     reduceOnly?: boolean;
     clientOrderId?: string;
-    trigger?: { price: bigint; direction: 'above' | 'below' };
+    trigger?: { price: bigint; direction: 'above' | 'below'; trail?: bigint };
   } = {},
 ): OrderRequest {
   const r: OrderRequest = {

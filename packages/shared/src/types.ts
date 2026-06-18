@@ -12,8 +12,16 @@ export type MarketType = 'spot' | 'perp';
  * 'below' triggers when mark ≤ price (stop-sell / take-profit-buy).
  */
 export interface TriggerSpec {
+  /** current stop price (1e8); for a trailing stop this ratchets with the ref price */
   price: bigint;
   direction: 'above' | 'below';
+  /**
+   * Trailing-stop distance (1e8, > 0). When set, the order is a TRAILING stop:
+   * `price` is maintained `trail` away from the most favorable ref price seen
+   * (raised as the ref rises for a sell-stop / lowered as it falls for a
+   * buy-stop) and fires when the ref reverses back through `price`.
+   */
+  trail?: bigint;
 }
 
 export interface MarketConfig {

@@ -213,6 +213,9 @@ export class WsHub implements EventSink {
           // keep only the latest mark per market in this batch
           marksByMarket.set(e.marketId, { marketId: e.marketId, price: e.price, ts: e.ts });
           break;
+        case 'orderTriggerUpdated':
+          touch(e.userId, 'order'); // trailing stop ratcheted → refresh the owner's orders
+          break;
       }
     }
 

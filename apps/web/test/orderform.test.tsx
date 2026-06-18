@@ -259,6 +259,52 @@ describe('OrderForm submission', () => {
     });
   });
 
+  it('submits a trailing stop-MARKET sell with trailDistance and NO triggerPrice (gap #4)', async () => {
+    seedSpot();
+    renderWithQuery(
+      <>
+        <OrderForm />
+        <Toasts />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '매도' }));
+    fireEvent.click(screen.getByRole('button', { name: '시장가' }));
+    fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '0.5' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '트리거 주문 (스탑/익절)' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '트레일링 스탑' }));
+    fireEvent.change(screen.getByLabelText('트레일 간격'), { target: { value: '500' } });
+    fireEvent.click(screen.getByRole('button', { name: '매도 BTC' }));
+
+    expect(await screen.findByText('주문이 접수되었습니다')).toBeInTheDocument();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      marketId: 'BTC-USDC',
+      side: 'sell',
+      type: 'market',
+      qty: '0.5',
+      tif: 'IOC',
+      trailDistance: '500',
+      triggerDirection: 'below', // sell default = trailing stop-loss
+    });
+  });
+
+  it('rejects a trailing stop with no trail distance', async () => {
+    seedSpot();
+    renderWithQuery(
+      <>
+        <OrderForm />
+        <Toasts />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '시장가' }));
+    fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '0.5' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '트리거 주문 (스탑/익절)' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '트레일링 스탑' }));
+    fireEvent.click(screen.getByRole('button', { name: '매수 BTC' }));
+    expect(await screen.findByText('트레일 간격을 입력해주세요')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('rejects a trigger order with no trigger price', async () => {
     seedSpot();
     renderWithQuery(

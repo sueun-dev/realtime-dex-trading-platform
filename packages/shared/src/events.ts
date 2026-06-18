@@ -109,6 +109,16 @@ export interface MarkPriceEvent extends BaseEvent {
   price: bigint;
 }
 
+/** A resting trailing-stop ratcheted its stop price to a new (more favorable) level. */
+export interface OrderTriggerUpdatedEvent extends BaseEvent {
+  kind: 'orderTriggerUpdated';
+  orderId: string;
+  userId: string;
+  marketId: string;
+  /** the new stop price (1e8) */
+  triggerPrice: bigint;
+}
+
 export type EngineEvent =
   | OrderAcceptedEvent
   | OrderRejectedEvent
@@ -118,4 +128,5 @@ export type EngineEvent =
   | PositionChangedEvent
   | LiquidationEvent
   | FundingAppliedEvent
-  | MarkPriceEvent;
+  | MarkPriceEvent
+  | OrderTriggerUpdatedEvent;

@@ -169,3 +169,108 @@ describe('conditional (stop / take-profit) orders', () => {
     expect(ex2.getOpenOrders('alice').some((o) => o.id === id)).toBe(true);
   });
 });
+
+describe('trailing-stop orders', () => {
+  it('seeds its initial stop `trail` below the ref for a sell-stop, ratchets up, then fires on reversal', () => {
+    const { ex, t } = perpSetup();
+    openLong(ex, u(100), u(1)); // alice long 1
+    ex.setMarkPrice(P, u(100), TS++); // ref = 100
+    // trailing sell-stop, trail 10, no explicit price → seeds at 100 - 10 = 90
+    const id = acceptedId(
+      ex.submitOrder(
+        'alice',
+        req(P, 'sell', 'market', undefined, u(1), {
+          tif: 'IOC',
+          reduceOnly: true,
+          trigger: { price: 0n, direction: 'below', trail: u(10) },
+        }),
+        TS++,
+      ),
+    );
+    expect(ex.getOrder(id)!.trigger).toEqual({ price: u(90), direction: 'below', trail: u(10) });
+
+    // ref rises to 130 → stop ratchets to 120, emitting orderTriggerUpdated
+    const up = ex.setMarkPrice(P, u(130), TS++);
+    expect(up.some((e) => e.kind === 'orderTriggerUpdated' && e.triggerPrice === u(120))).toBe(true);
+    expect(ex.getOrder(id)!.trigger!.price).toBe(u(120));
+
+    // small dip to 125 does NOT fire (still above the 120 stop) and does not ratchet down
+    ex.submitOrder('carol', req(P, 'buy', 'limit', u(119), u(1)), TS++);
+    const dip = ex.setMarkPrice(P, u(125), TS++);
+    expect(dip.some((e) => e.kind === 'orderCancelled' && e.reason === 'triggered')).toBe(false);
+    expect(ex.getOrder(id)!.trigger!.price).toBe(u(120)); // stop unchanged on adverse move
+
+    // reversal through 120 → fires the protective sell, closing the long
+    const fire = ex.setMarkPrice(P, u(118), TS++);
+    expect(fire.some((e) => e.kind === 'orderCancelled' && e.reason === 'triggered')).toBe(true);
+    expect(pos(ex, 'alice', P)).toBeUndefined();
+    t.check(ex);
+  });
+
+  it('a trailing buy-stop seeds above the ref and ratchets DOWN as the ref falls', () => {
+    const { ex, t } = perpSetup();
+    ex.setMarkPrice(P, u(100), TS++); // ref 100
+    const id = acceptedId(
+      ex.submitOrder(
+        'alice',
+        req(P, 'buy', 'market', undefined, u(1), {
+          tif: 'IOC',
+          trigger: { price: 0n, direction: 'above', trail: u(10) },
+        }),
+        TS++,
+      ),
+    );
+    expect(ex.getOrder(id)!.trigger!.price).toBe(u(110)); // 100 + 10
+
+    const down = ex.setMarkPrice(P, u(70), TS++); // ref falls → stop drops to 80
+    expect(down.some((e) => e.kind === 'orderTriggerUpdated' && e.triggerPrice === u(80))).toBe(true);
+    expect(ex.getOrder(id)!.trigger!.price).toBe(u(80));
+    t.check(ex);
+  });
+
+  it('rejects a trailing stop when there is no reference price to seed from', () => {
+    const { ex } = perpSetup(); // no mark/last price set yet
+    const rej = rejection(
+      ex.submitOrder(
+        'alice',
+        req(P, 'sell', 'market', undefined, u(1), {
+          tif: 'IOC',
+          trigger: { price: 0n, direction: 'below', trail: u(10) },
+        }),
+        TS++,
+      ),
+    );
+    expect(rej?.code).toBe('INVALID_ORDER');
+  });
+
+  it('persists the ratcheted stop so a restore resumes from the tightened level', () => {
+    const { ex } = perpSetup();
+    ex.setMarkPrice(P, u(100), TS++);
+    const id = acceptedId(
+      ex.submitOrder(
+        'alice',
+        req(P, 'sell', 'market', undefined, u(1), {
+          tif: 'IOC',
+          reduceOnly: true,
+          trigger: { price: 0n, direction: 'below', trail: u(10) },
+        }),
+        TS++,
+      ),
+    );
+    ex.setMarkPrice(P, u(150), TS++); // ratchet stop up to 140
+    const ratcheted = ex.getOrder(id)!;
+    expect(ratcheted.trigger).toEqual({ price: u(140), direction: 'below', trail: u(10) });
+
+    const ex2 = newExchange();
+    ex2.restoreState({
+      balances: [{ userId: 'alice', asset: 'USDC', available: u(100_000), locked: 0n }],
+      positions: [],
+      leverages: [{ userId: 'alice', marketId: P, leverage: 5 }],
+      openOrders: [],
+      conditionalOrders: [ratcheted],
+      markPrices: [],
+      lastSeq: ratcheted.seq,
+    });
+    expect(ex2.getOrder(id)!.trigger).toEqual({ price: u(140), direction: 'below', trail: u(10) });
+  });
+});
