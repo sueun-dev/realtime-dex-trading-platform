@@ -288,6 +288,34 @@ describe('OrderForm submission', () => {
     });
   });
 
+  it('submits a TWAP parent order to /api/twap with slices + duration (gap #3)', async () => {
+    seedSpot();
+    renderWithQuery(
+      <>
+        <OrderForm />
+        <Toasts />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '시장가' }));
+    fireEvent.change(screen.getByPlaceholderText('수량'), { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'TWAP 분할 주문' }));
+    fireEvent.change(screen.getByLabelText('분할 횟수'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('실행 시간(분)'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: '매수 BTC' }));
+
+    expect(await screen.findByText('TWAP 주문이 시작되었습니다')).toBeInTheDocument();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/twap');
+    expect(JSON.parse(init.body as string)).toEqual({
+      marketId: 'BTC-USDC',
+      side: 'buy',
+      totalQty: '6',
+      durationMs: 1_800_000, // 30 min
+      slices: 3,
+      type: 'market',
+    });
+  });
+
   it('rejects a trailing stop with no trail distance', async () => {
     seedSpot();
     renderWithQuery(

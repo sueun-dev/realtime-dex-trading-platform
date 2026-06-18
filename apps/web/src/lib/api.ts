@@ -242,6 +242,58 @@ export interface PlaceOrderBody {
   trailDistance?: string;
 }
 
+export interface TwapBody {
+  marketId: string;
+  side: Side;
+  totalQty: string;
+  durationMs: number;
+  slices: number;
+  type?: OrderType;
+  limitPrice?: string;
+  reduceOnly?: boolean;
+}
+
+export interface TwapWire {
+  id: string;
+  marketId: string;
+  side: Side;
+  totalQty: string;
+  filledQty: string;
+  sliceQty: string;
+  slicesDone: number;
+  slicesTotal: number;
+  type: OrderType;
+  limitPrice: string | null;
+  intervalMs: number;
+  nextRunTs: number;
+  status: 'running' | 'done' | 'cancelled';
+  createdTs: number;
+}
+
+export interface TwapData {
+  id: string;
+  marketId: string;
+  side: Side;
+  totalQty: bigint;
+  filledQty: bigint;
+  slicesDone: number;
+  slicesTotal: number;
+  status: 'running' | 'done' | 'cancelled';
+}
+
+export function parseTwap(w: TwapWire): TwapData {
+  return {
+    id: w.id,
+    marketId: w.marketId,
+    side: w.side,
+    totalQty: toUnits(w.totalQty),
+    filledQty: toUnits(w.filledQty),
+    slicesDone: w.slicesDone,
+    slicesTotal: w.slicesTotal,
+    status: w.status,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // parsed (bigint) app-side models
 // ---------------------------------------------------------------------------
@@ -484,5 +536,15 @@ export const api = {
   },
   setLeverage(marketId: string, leverage: number): Promise<unknown> {
     return apiFetch<unknown>('/account/leverage', { method: 'POST', body: { marketId, leverage } });
+  },
+  createTwap(body: TwapBody): Promise<unknown> {
+    return apiFetch<unknown>('/twap', { method: 'POST', body });
+  },
+  async twaps(): Promise<TwapWire[]> {
+    const raw = await apiFetch<unknown>('/twap');
+    return Array.isArray(raw) ? (raw as TwapWire[]) : [];
+  },
+  cancelTwap(id: string): Promise<unknown> {
+    return apiFetch<unknown>(`/twap/${id}`, { method: 'DELETE' });
   },
 };

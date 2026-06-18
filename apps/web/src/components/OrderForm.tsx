@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { divRound, feeOn, fromUnits, mulDiv, mulUnits, roundToLot, roundToTick, toUnits } from '@dex/shared';
 import type { OrderType, Side, TimeInForce } from '@dex/shared';
 import { api, koMessage } from '../lib/api.js';
-import type { PlaceOrderBody, TriggerDirection } from '../lib/api.js';
+import type { PlaceOrderBody, TriggerDirection, TwapBody } from '../lib/api.js';
 import { formatAmount, formatQty } from '../lib/format.js';
 import { useAuthStore } from '../lib/auth.js';
 import { useBookStore } from '../stores/book.js';
@@ -58,6 +58,9 @@ export function OrderForm() {
   const [triggerStr, setTriggerStr] = useState('');
   const [trailingOn, setTrailingOn] = useState(false);
   const [trailStr, setTrailStr] = useState('');
+  const [twapOn, setTwapOn] = useState(false);
+  const [twapSlices, setTwapSlices] = useState('5');
+  const [twapMinutes, setTwapMinutes] = useState('30');
   // null = user hasn't overridden, so the direction follows the side default
   // (sell → below = stop-loss, buy → above = stop-buy).
   const [triggerDir, setTriggerDir] = useState<TriggerDirection | null>(null);
@@ -152,6 +155,50 @@ export function OrderForm() {
     }
     if (qty === null || qty <= 0n) {
       toast.error('수량을 입력해주세요');
+      return;
+    }
+
+    // TWAP: slice the parent order over time (its own endpoint, mutually
+    // exclusive with the trigger/trailing conditional path)
+    if (twapOn) {
+      const slices = Number(twapSlices);
+      const minutes = Number(twapMinutes);
+      if (!Number.isInteger(slices) || slices < 2) {
+        toast.error('분할 횟수는 2회 이상이어야 합니다');
+        return;
+      }
+      if (!Number.isFinite(minutes) || minutes <= 0) {
+        toast.error('실행 시간(분)을 입력해주세요');
+        return;
+      }
+      if (type === 'limit' && (limitPrice === null || limitPrice <= 0n)) {
+        toast.error('가격을 입력해주세요');
+        return;
+      }
+      const tbody: TwapBody = {
+        marketId: market.id,
+        side,
+        totalQty: fromUnits(qty),
+        durationMs: Math.round(minutes * 60_000),
+        slices,
+        type,
+        ...(type === 'limit' && limitPrice !== null ? { limitPrice: fromUnits(limitPrice) } : {}),
+        ...(isPerp ? { reduceOnly } : {}),
+      };
+      setSubmitting(true);
+      try {
+        await api.createTwap(tbody);
+        toast.success('TWAP 주문이 시작되었습니다');
+        setQtyStr('');
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['twaps'] }),
+          queryClient.invalidateQueries({ queryKey: ['account'] }),
+        ]);
+      } catch (e) {
+        toast.error(koMessage(e));
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
 
@@ -344,6 +391,45 @@ export function OrderForm() {
         <label className="check trigger-toggle">
           <input
             type="checkbox"
+            checked={twapOn}
+            onChange={(e) => setTwapOn(e.target.checked)}
+          />
+          <span>TWAP 분할 주문</span>
+        </label>
+        {twapOn && (
+          <div className="trigger-body">
+            <label className="field">
+              <span className="field-label dim">분할 횟수</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                aria-label="분할 횟수"
+                value={twapSlices}
+                onChange={(e) => setTwapSlices(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label dim">실행 시간 (분)</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                aria-label="실행 시간(분)"
+                value={twapMinutes}
+                onChange={(e) => setTwapMinutes(e.target.value)}
+              />
+            </label>
+            <p className="trigger-hint dim">
+              {twapSlices || '…'}회로 나눠 {twapMinutes || '…'}분 동안 실행됩니다
+            </p>
+          </div>
+        )}
+      </div>
+
+      {!twapOn && (
+      <div className="trigger-section">
+        <label className="check trigger-toggle">
+          <input
+            type="checkbox"
             checked={triggerOn}
             onChange={(e) => setTriggerOn(e.target.checked)}
           />
@@ -410,6 +496,7 @@ export function OrderForm() {
           </div>
         )}
       </div>
+      )}
 
       <div className="summary">
         <div className="summary-row">
