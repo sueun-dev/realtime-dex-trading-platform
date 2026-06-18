@@ -133,8 +133,16 @@ describe('websocket hub', () => {
     const trades = tradeFrame.data as { price: string; qty: string; takerSide: string }[];
     expect(trades[0]).toMatchObject({ price: '100', qty: '0.2', takerSide: 'buy' });
 
-    const userFrame = await probe.waitFor((f) => f.channel === 'user');
-    expect(typeof (userFrame.data as { type: string }).type).toBe('string');
+    // the user frame carries not just a coalesced kind string but the actual
+    // changed entities (a fill here), so a client can update without refetching
+    const userFrame = await probe.waitFor((f) => {
+      if (f.channel !== 'user') return false;
+      const d = f.data as { fills?: unknown[] };
+      return Array.isArray(d.fills) && d.fills.length > 0;
+    });
+    const d = userFrame.data as { type: string; fills: { price: string; qty: string }[] };
+    expect(d.type).toContain('fill');
+    expect(d.fills[0]).toMatchObject({ price: '100', qty: '0.2' });
     probe.close();
   });
 

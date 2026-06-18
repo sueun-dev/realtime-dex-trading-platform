@@ -44,6 +44,18 @@ const LIQ_RING = 100;
 const HEARTBEAT_MS = 30_000;
 const INTERNAL_ACCOUNTS = new Set([FEE_ACCOUNT, CLEARING_ACCOUNT]);
 
+/** Per-user accumulator for one dispatch batch — the changed entities the user
+ * channel ships so a client can update without a full refetch. */
+interface UserBucket {
+  kinds: Set<string>;
+  orders: unknown[];
+  fills: unknown[];
+  balances: unknown[];
+  positions: unknown[];
+  liquidations: unknown[];
+  funding: unknown[];
+}
+
 /**
  * WebSocket hub for the /ws contract:
  *   in : {op:'subscribe'|'unsubscribe', channel} | {op:'auth', token} | {op:'ping'}
@@ -159,15 +171,19 @@ export class WsHub implements EventSink {
     const tradesByMarket = new Map<string, Trade[]>();
     const marksByMarket = new Map<string, { marketId: string; price: bigint; ts: number }>();
     const liqs: { marketId: string; size: bigint; markPrice: bigint; reason: string; ts: number }[] = [];
-    const touchedUsers = new Map<string, Set<string>>(); // userId -> event kinds
-    const touch = (userId: string, kind: string): void => {
-      if (INTERNAL_ACCOUNTS.has(userId)) return;
-      let set = touchedUsers.get(userId);
-      if (!set) {
-        set = new Set();
-        touchedUsers.set(userId, set);
+    const touchedUsers = new Map<string, UserBucket>();
+    // touch returns the user's bucket so the caller can attach the changed
+    // entity (so the user frame carries data, not just a "something changed"
+    // kind string — clients can update incrementally instead of refetching).
+    const touch = (userId: string, kind: string): UserBucket | null => {
+      if (INTERNAL_ACCOUNTS.has(userId)) return null;
+      let b = touchedUsers.get(userId);
+      if (!b) {
+        b = { kinds: new Set(), orders: [], fills: [], balances: [], positions: [], liquidations: [], funding: [] };
+        touchedUsers.set(userId, b);
       }
-      set.add(kind);
+      b.kinds.add(kind);
+      return b;
     };
 
     for (const e of events) {
@@ -180,41 +196,52 @@ export class WsHub implements EventSink {
           }
           list.push(e.trade);
           this.#dirtyBooks.add(e.trade.marketId);
-          touch(e.trade.makerUserId, 'fill');
-          touch(e.trade.takerUserId, 'fill');
+          touch(e.trade.makerUserId, 'fill')?.fills.push(jsonSafe(e.trade));
+          touch(e.trade.takerUserId, 'fill')?.fills.push(jsonSafe(e.trade));
           break;
         }
         case 'orderAccepted':
           this.#dirtyBooks.add(e.order.marketId);
-          touch(e.order.userId, 'order');
+          touch(e.order.userId, 'order')?.orders.push(jsonSafe(e.order));
           break;
         case 'orderCancelled':
           this.#dirtyBooks.add(e.marketId);
-          touch(e.userId, 'order');
+          touch(e.userId, 'order')?.orders.push(
+            jsonSafe({ id: e.orderId, marketId: e.marketId, status: 'cancelled', remainingQty: e.remainingQty, reason: e.reason }),
+          );
           break;
         case 'orderRejected':
-          touch(e.userId, 'order');
+          touch(e.userId, 'order')?.orders.push({ rejected: e.code, reason: e.reason });
           break;
         case 'balanceChanged':
-          touch(e.userId, 'balance');
+          touch(e.userId, 'balance')?.balances.push(
+            jsonSafe({ asset: e.asset, available: e.available, locked: e.locked, reason: e.reason }),
+          );
           break;
         case 'positionChanged':
-          touch(e.userId, 'position');
+          touch(e.userId, 'position')?.positions.push(
+            jsonSafe({ marketId: e.marketId, size: e.size, entryPrice: e.entryPrice, leverage: e.leverage, margin: e.margin, realizedPnl: e.realizedPnl }),
+          );
           break;
         case 'liquidation':
-          touch(e.userId, 'liquidation');
+          touch(e.userId, 'liquidation')?.liquidations.push(
+            jsonSafe({ marketId: e.marketId, size: e.size, markPrice: e.markPrice, reason: e.reason }),
+          );
           // public tape is ANONYMIZED — market/size/mark/reason only, no userId
           liqs.push({ marketId: e.marketId, size: e.size, markPrice: e.markPrice, reason: e.reason, ts: e.ts });
           break;
         case 'fundingApplied':
-          touch(e.userId, 'funding');
+          touch(e.userId, 'funding')?.funding.push(
+            jsonSafe({ marketId: e.marketId, rate: e.rate, payment: e.payment, markPrice: e.markPrice }),
+          );
           break;
         case 'markPrice':
           // keep only the latest mark per market in this batch
           marksByMarket.set(e.marketId, { marketId: e.marketId, price: e.price, ts: e.ts });
           break;
         case 'orderTriggerUpdated':
-          touch(e.userId, 'order'); // trailing stop ratcheted → refresh the owner's orders
+          // trailing stop ratcheted → ship the new stop so the owner can update
+          touch(e.userId, 'order')?.orders.push(jsonSafe({ id: e.orderId, marketId: e.marketId, triggerPrice: e.triggerPrice }));
           break;
       }
     }
@@ -238,8 +265,18 @@ export class WsHub implements EventSink {
       this.#tradeRing.set(marketId, ring.slice(0, TRADE_RING));
       this.#broadcast(`trades:${marketId}`, wires);
     }
-    for (const [userId, kinds] of touchedUsers) {
-      this.#sendUser(userId, { type: [...kinds].join(',') });
+    for (const [userId, b] of touchedUsers) {
+      // `type` (coalesced kinds) stays for backward compatibility; the entity
+      // arrays let a client apply the change without a full refetch
+      this.#sendUser(userId, {
+        type: [...b.kinds].join(','),
+        ...(b.orders.length > 0 ? { orders: b.orders } : {}),
+        ...(b.fills.length > 0 ? { fills: b.fills } : {}),
+        ...(b.balances.length > 0 ? { balances: b.balances } : {}),
+        ...(b.positions.length > 0 ? { positions: b.positions } : {}),
+        ...(b.liquidations.length > 0 ? { liquidations: b.liquidations } : {}),
+        ...(b.funding.length > 0 ? { funding: b.funding } : {}),
+      });
     }
     this.#scheduleBookFlush();
   }
