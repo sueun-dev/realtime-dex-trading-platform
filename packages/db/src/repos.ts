@@ -350,18 +350,33 @@ export function createRepos(db: Db) {
       return rows.map((r) => ({ marketId: r.marketId, amount: r.amount, seq: r.seq, ts: r.ts }));
     },
 
-    /** Cumulative realized PnL for a user: grand total + per-market totals. */
+    /**
+     * Cumulative realized PnL for a user: grand total + per-market totals. Sums
+     * the live event tape AND the pruned-out carryover, so the total stays exact
+     * for all time even after retention trims the tape.
+     */
     async realizedPnlSummary(userId: string): Promise<RealizedPnlSummary> {
-      const rows = await db
-        .select({
-          marketId: s.realizedPnlEvents.marketId,
-          amount: sql<string>`sum(${s.realizedPnlEvents.amount})`,
-        })
-        .from(s.realizedPnlEvents)
-        .where(eq(s.realizedPnlEvents.userId, userId))
-        .groupBy(s.realizedPnlEvents.marketId)
-        .orderBy(asc(s.realizedPnlEvents.marketId));
-      const byMarket = rows.map((r) => ({ marketId: r.marketId, amount: BigInt(r.amount) }));
+      const [live, carry] = await Promise.all([
+        db
+          .select({
+            marketId: s.realizedPnlEvents.marketId,
+            amount: sql<string>`sum(${s.realizedPnlEvents.amount})`,
+          })
+          .from(s.realizedPnlEvents)
+          .where(eq(s.realizedPnlEvents.userId, userId))
+          .groupBy(s.realizedPnlEvents.marketId),
+        db
+          .select({ marketId: s.realizedPnlCarryover.marketId, amount: s.realizedPnlCarryover.amount })
+          .from(s.realizedPnlCarryover)
+          .where(eq(s.realizedPnlCarryover.userId, userId)),
+      ]);
+      const byMarketMap = new Map<string, bigint>();
+      for (const r of carry) byMarketMap.set(r.marketId, (byMarketMap.get(r.marketId) ?? 0n) + r.amount);
+      for (const r of live)
+        byMarketMap.set(r.marketId, (byMarketMap.get(r.marketId) ?? 0n) + BigInt(r.amount));
+      const byMarket = [...byMarketMap.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([marketId, amount]) => ({ marketId, amount }));
       const total = byMarket.reduce((a, b) => a + b.amount, 0n);
       return { total, byMarket };
     },
@@ -540,7 +555,7 @@ export function createRepos(db: Db) {
    */
   /** Rolling cap: delete all but the most-recent `keep` rows, ordered by `seq`. */
   async function trimBySeq(
-    table: typeof s.trades | typeof s.fundingPayments | typeof s.liquidations | typeof s.realizedPnlEvents,
+    table: typeof s.trades | typeof s.fundingPayments | typeof s.liquidations,
     keep: number,
   ): Promise<number> {
     const cutoff = await db
@@ -553,6 +568,48 @@ export function createRepos(db: Db) {
     if (cut === undefined) return 0;
     const del = await db.delete(table).where(lte(table.seq, cut)).returning({ seq: table.seq });
     return del.length;
+  }
+
+  /**
+   * Trim the realized-PnL tape like trimBySeq, but first FOLD the rows about to
+   * be deleted into the per-(user, market) carryover so the cumulative summary
+   * (realizedPnlSummary) stays exact for all time. Without this, pruning would
+   * silently shrink a user's reported lifetime PnL.
+   */
+  async function pruneRealizedPnl(keep: number): Promise<number> {
+    const cutoff = await db
+      .select({ seq: s.realizedPnlEvents.seq })
+      .from(s.realizedPnlEvents)
+      .orderBy(desc(s.realizedPnlEvents.seq))
+      .limit(1)
+      .offset(keep);
+    const cut = cutoff[0]?.seq;
+    if (cut === undefined) return 0;
+    return db.transaction(async (tx) => {
+      const sums = await tx
+        .select({
+          userId: s.realizedPnlEvents.userId,
+          marketId: s.realizedPnlEvents.marketId,
+          amount: sql<string>`sum(${s.realizedPnlEvents.amount})`,
+        })
+        .from(s.realizedPnlEvents)
+        .where(lte(s.realizedPnlEvents.seq, cut))
+        .groupBy(s.realizedPnlEvents.userId, s.realizedPnlEvents.marketId);
+      for (const r of sums) {
+        await tx
+          .insert(s.realizedPnlCarryover)
+          .values({ userId: r.userId, marketId: r.marketId, amount: BigInt(r.amount) })
+          .onConflictDoUpdate({
+            target: [s.realizedPnlCarryover.userId, s.realizedPnlCarryover.marketId],
+            set: { amount: sql`${s.realizedPnlCarryover.amount} + ${r.amount}::numeric` },
+          });
+      }
+      const del = await tx
+        .delete(s.realizedPnlEvents)
+        .where(lte(s.realizedPnlEvents.seq, cut))
+        .returning({ seq: s.realizedPnlEvents.seq });
+      return del.length;
+    });
   }
 
   const retention = {
@@ -584,7 +641,9 @@ export function createRepos(db: Db) {
         trades: await trimBySeq(s.trades, opts.tradesKeep),
         funding: await trimBySeq(s.fundingPayments, opts.eventsKeep),
         liquidations: await trimBySeq(s.liquidations, opts.eventsKeep),
-        realizedPnl: await trimBySeq(s.realizedPnlEvents, opts.eventsKeep),
+        // realized PnL is folded into a carryover before trimming so the
+        // lifetime summary stays exact (see pruneRealizedPnl)
+        realizedPnl: await pruneRealizedPnl(opts.eventsKeep),
       };
     },
   };

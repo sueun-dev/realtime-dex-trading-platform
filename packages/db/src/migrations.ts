@@ -140,6 +140,13 @@ CREATE TABLE IF NOT EXISTS realized_pnl_events (
 );
 CREATE INDEX IF NOT EXISTS realized_pnl_user_seq_idx ON realized_pnl_events (user_id, seq);
 
+CREATE TABLE IF NOT EXISTS realized_pnl_carryover (
+  user_id text NOT NULL,
+  market_id text NOT NULL,
+  amount numeric(38,0) NOT NULL,
+  PRIMARY KEY (user_id, market_id)
+);
+
 CREATE TABLE IF NOT EXISTS auth_nonces (
   address text NOT NULL,
   nonce text NOT NULL,

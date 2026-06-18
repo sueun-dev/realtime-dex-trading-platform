@@ -11,6 +11,7 @@ const EXPECTED_TABLES = [
   'meta',
   'orders',
   'positions',
+  'realized_pnl_carryover',
   'realized_pnl_events',
   'trades',
   'user_market_leverage',

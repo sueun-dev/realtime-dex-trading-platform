@@ -567,4 +567,42 @@ describe('retention.prune (bounds DB growth from book-mirror churn)', () => {
     const recent = await repos.trades.recentForMarket(SPOT, 50);
     expect(recent.map((t) => t.seq).sort((a, b) => a - b)).toEqual([4, 5]);
   });
+
+  it('pruning realized PnL folds trimmed rows into a carryover so the lifetime summary is exact', async () => {
+    const { projector, repos } = await setup();
+    // five realized-PnL bookings for ALICE on PERP: +10, -4, +6, +1, +2 = +15
+    const amounts = [10n, -4n, 6n, 1n, 2n].map((a) => a * SCALE);
+    const batch: EngineEvent[] = amounts.map((amount, i) =>
+      positionChanged({
+        seq: i + 1,
+        ts: i + 1,
+        userId: ALICE,
+        marketId: PERP,
+        size: SCALE,
+        entryPrice: 100n * SCALE,
+        leverage: 5,
+        margin: 20n * SCALE,
+        realizedPnl: amount,
+      }),
+    );
+    await projector.applyBatch(batch);
+    const before = await repos.perpHistory.realizedPnlSummary(ALICE);
+    expect(before.total).toBe(15n * SCALE);
+
+    // keep only the most-recent 2 rows → the older 3 (+10, -4, +6 = +12) fold into carryover
+    const pruned = await repos.retention.prune({
+      mirrorUserId: MIRROR,
+      terminalOrdersBeforeTs: 0,
+      tradesKeep: 1_000_000,
+      eventsKeep: 2,
+    });
+    expect(pruned.realizedPnl).toBe(3); // three oldest rows trimmed
+
+    // the live tape shrank, but the cumulative summary is UNCHANGED
+    const tape = await repos.perpHistory.realizedPnlForUser(ALICE);
+    expect(tape).toHaveLength(2);
+    const after = await repos.perpHistory.realizedPnlSummary(ALICE);
+    expect(after.total).toBe(15n * SCALE); // carryover + live = exact lifetime total
+    expect(after.byMarket).toEqual([{ marketId: PERP, amount: 15n * SCALE }]);
+  });
 });

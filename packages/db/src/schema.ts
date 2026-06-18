@@ -179,6 +179,21 @@ export const realizedPnlEvents = pgTable(
   (t) => [index('realized_pnl_user_seq_idx').on(t.userId, t.seq)],
 );
 
+/**
+ * Sum of realized PnL that has been PRUNED out of realized_pnl_events, kept per
+ * (user, market) so the cumulative realized-PnL summary stays exact even after
+ * the event tape is trimmed. summary = this carryover + Σ(remaining live rows).
+ */
+export const realizedPnlCarryover = pgTable(
+  'realized_pnl_carryover',
+  {
+    userId: text('user_id').notNull(),
+    marketId: text('market_id').notNull(),
+    amount: money('amount').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.marketId] })],
+);
+
 export const authNonces = pgTable(
   'auth_nonces',
   {
