@@ -149,6 +149,30 @@ describe('websocket hub', () => {
     probe.close();
   });
 
+  it('public trades:<mkt> tape is anonymized — no userIds / orderIds / fees', async () => {
+    const probe = new WsProbe(base);
+    await probe.ready();
+    probe.send({ op: 'subscribe', channel: `trades:${M}`, market: M });
+    // a real engine fill between alice (maker) and bob (taker)
+    await placeOrder(t.app, alice, { marketId: M, side: 'sell', type: 'limit', price: '101', qty: '0.3', tif: 'GTC' });
+    await placeOrder(t.app, bob, { marketId: M, side: 'buy', type: 'limit', price: '101', qty: '0.3', tif: 'GTC' });
+
+    const frame = await probe.waitFor((f) => {
+      if (f.channel !== `trades:${M}`) return false;
+      return (f.data as { qty?: string; takerSide?: string }[]).some((x) => x.takerSide === 'buy');
+    });
+    const print = (frame.data as Record<string, unknown>[]).find((x) => x['takerSide'] === 'buy')!;
+    // the public print exposes only price/qty/aggressor/time…
+    expect(print).toHaveProperty('price');
+    expect(print).toHaveProperty('qty');
+    expect(print).toHaveProperty('takerSide', 'buy');
+    // …and NEVER the counterparties' identities, order ids, or fees
+    for (const leaked of ['makerUserId', 'takerUserId', 'makerOrderId', 'takerOrderId', 'makerFee', 'takerFee']) {
+      expect(print).not.toHaveProperty(leaked);
+    }
+    probe.close();
+  });
+
   it('late trades subscriber receives the recent-trades ring', async () => {
     const probe = new WsProbe(base);
     await probe.ready();

@@ -65,6 +65,21 @@ describe('TWAP parent orders (gap #3)', () => {
     expect(acct.positions.find((p) => p.marketId === M)?.size).toBe('6');
   });
 
+  it('overlapping ticks never double-fire the same slice (re-entrancy guard)', async () => {
+    await placeOrder(t.app, bob, { marketId: M, side: 'sell', type: 'limit', price: '100', qty: '10', tif: 'GTC' });
+    const job = t.svc.twap.create(
+      { userId: alice.address, marketId: M, side: 'buy', totalQty: 300_000_000n, durationMs: 9_000, slices: 3, type: 'market', reduceOnly: false },
+      10_000,
+    );
+    // fire two ticks for the same instant concurrently: the second must be a
+    // no-op (the first reserved the slot + holds the #ticking guard)
+    const p1 = t.svc.twap.tick(10_000);
+    const p2 = t.svc.twap.tick(10_000);
+    await Promise.all([p1, p2]);
+    const after = t.svc.twap.listFor(alice.address).find((j) => j.id === job.id);
+    expect(after?.slicesDone).toBe(1); // exactly one slice fired, not two
+  });
+
   it('POST creates, GET lists, DELETE cancels remaining slices (routes + ownership)', async () => {
     const res = await authed(t.app, alice, 'POST', '/api/twap', {
       marketId: M,

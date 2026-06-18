@@ -7,6 +7,7 @@ import {
   mulDiv,
   mulUnits,
   parseOrderRequest,
+  roundToLot,
   roundToTick,
   zBracketRequest,
   zPositiveUnits,
@@ -55,6 +56,17 @@ function avgFillPrice(events: EngineEvent[], orderId: string): bigint | null {
     }
   }
   return qty > 0n ? divUnits(notional, qty) : null;
+}
+
+/** Total base qty an order filled across its trade events. */
+function entryFillQty(events: EngineEvent[], orderId: string): bigint {
+  let qty = 0n;
+  for (const e of events) {
+    if (e.kind === 'trade' && (e.trade.takerOrderId === orderId || e.trade.makerOrderId === orderId)) {
+      qty += e.trade.qty;
+    }
+  }
+  return qty;
 }
 
 export function registerOrderRoutes(
@@ -185,7 +197,13 @@ export function registerOrderRoutes(
     if (entryRej) throw new DexError('INVALID_ORDER', `bracket entry rejected: ${entryRej.reason}`);
     const entryAcc = entryOut.find((e) => e.kind === 'orderAccepted');
     if (!entryAcc) throw new DexError('INTERNAL', 'bracket entry produced no order');
-    if (!entryOut.some((e) => e.kind === 'trade')) {
+
+    // size the protective legs to the ACTUAL filled qty (a market IOC entry can
+    // partially fill, then cancel the remainder) so the legs exactly cover the
+    // real position and never over-reserve the reduce-only budget
+    const filled = entryFillQty(entryOut, entryAcc.order.id);
+    const coverQty = roundToLot(filled, m.lotSize);
+    if (coverQty <= 0n) {
       throw new DexError('INVALID_ORDER', 'bracket entry did not fill — no position to protect');
     }
 
@@ -196,10 +214,10 @@ export function registerOrderRoutes(
     const exitSide = p.side === 'buy' ? 'sell' : 'buy';
     const tpReq: OrderRequest = {
       marketId: p.marketId, side: exitSide, type: 'limit', price: p.takeProfitPrice,
-      qty: p.qty, tif: 'GTC', reduceOnly: true, ocoGroup: group,
+      qty: coverQty, tif: 'GTC', reduceOnly: true, ocoGroup: group,
     };
     const slReq: OrderRequest = {
-      marketId: p.marketId, side: exitSide, type: 'market', qty: p.qty, tif: 'IOC', reduceOnly: true,
+      marketId: p.marketId, side: exitSide, type: 'market', qty: coverQty, tif: 'IOC', reduceOnly: true,
       trigger: { price: p.stopLossPrice, direction: p.side === 'buy' ? 'below' : 'above' },
       ocoGroup: group,
     };
@@ -211,17 +229,41 @@ export function registerOrderRoutes(
       const events = engine.submitOrder(req.userId, slReq, Date.now());
       return [events, events] as const;
     });
+
+    // a bracket must never leave a position silently unprotected: if either
+    // protective leg was rejected, cancel any leg that did rest and flatten the
+    // just-opened entry, then surface the failure
+    const tpRej = tpOut.find((e) => e.kind === 'orderRejected');
+    const slRej = slOut.find((e) => e.kind === 'orderRejected');
+    if (tpRej || slRej) {
+      await pipeline.exec(() => {
+        const evts: EngineEvent[] = [];
+        for (const out of [tpOut, slOut]) {
+          const acc = out.find((e) => e.kind === 'orderAccepted');
+          const live = acc ? engine.getOrder(acc.order.id) : undefined;
+          if (live && (live.status === 'open' || live.status === 'untriggered')) {
+            evts.push(...engine.cancelOrder(req.userId, live.id, Date.now()));
+          }
+        }
+        const flatten: OrderRequest = {
+          marketId: p.marketId, side: exitSide, type: 'market', qty: coverQty, tif: 'IOC', reduceOnly: true,
+          price: defaultMarketBound(svc, { marketId: p.marketId, side: exitSide } as OrderRequest),
+        };
+        evts.push(...engine.submitOrder(req.userId, flatten, Date.now()));
+        return evts;
+      });
+      throw new DexError('INVALID_ORDER', `bracket protection failed (${(tpRej ?? slRej)!.reason}); entry was flattened`);
+    }
+
     const legState = (out: EngineEvent[]): unknown => {
       const acc = out.find((e) => e.kind === 'orderAccepted');
-      if (!acc) {
-        const rej = out.find((e) => e.kind === 'orderRejected');
-        return rej ? { rejected: rej.reason } : null;
-      }
+      if (!acc) return null;
       return jsonSafe(engine.getOrder(acc.order.id) ?? finalOrderState(out, acc.order));
     };
     return jsonSafe({
       ocoGroup: group,
       entry: jsonSafe(finalOrderState(entryOut, entryAcc.order)),
+      filledQty: coverQty,
       takeProfit: legState(tpOut),
       stopLoss: legState(slOut),
     });

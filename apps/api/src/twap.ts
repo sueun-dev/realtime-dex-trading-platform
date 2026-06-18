@@ -80,6 +80,7 @@ export class TwapScheduler {
   readonly #svc: Services;
   readonly #jobs = new Map<string, Job>();
   #seq = 0;
+  #ticking = false;
 
   constructor(svc: Services) {
     this.#svc = svc;
@@ -146,15 +147,23 @@ export class TwapScheduler {
 
   /** Fire every slice whose time has come, then evict long-finished jobs. */
   async tick(now: number): Promise<void> {
-    for (const job of this.#jobs.values()) {
-      if (job.status === 'running' && now >= job.nextRunTs) {
-        await this.#runSlice(job, now);
+    // re-entrancy guard: the wall-clock ticker can fire again before a slow
+    // slice's async submit resolves; without this, two ticks could double-fire
+    if (this.#ticking) return;
+    this.#ticking = true;
+    try {
+      for (const job of this.#jobs.values()) {
+        if (job.status === 'running' && now >= job.nextRunTs) {
+          await this.#runSlice(job, now);
+        }
       }
-    }
-    for (const [id, job] of this.#jobs) {
-      if (job.status !== 'running' && job.endedTs > 0 && now - job.endedTs > RETAIN_MS) {
-        this.#jobs.delete(id);
+      for (const [id, job] of this.#jobs) {
+        if (job.status !== 'running' && job.endedTs > 0 && now - job.endedTs > RETAIN_MS) {
+          this.#jobs.delete(id);
+        }
       }
+    } finally {
+      this.#ticking = false;
     }
   }
 
@@ -165,6 +174,17 @@ export class TwapScheduler {
       remainingSlices === 1
         ? job.totalQty - job.sliceQty * BigInt(job.slicesTotal - 1)
         : job.sliceQty;
+
+    // RESERVE this slice's slot BEFORE awaiting the pipeline: advance the
+    // counter + next-run time up front so an overlapping tick (the prior async
+    // submit hasn't resolved yet) can never re-select and double-fire this slice.
+    job.slicesDone += 1;
+    if (job.slicesDone >= job.slicesTotal) {
+      job.status = 'done';
+      job.endedTs = now;
+    } else {
+      job.nextRunTs = now + job.intervalMs;
+    }
 
     if (qty > 0n) {
       try {
@@ -180,16 +200,8 @@ export class TwapScheduler {
         }
       } catch (e) {
         this.#svc.log(`twap ${job.id} slice failed: ${String(e)}`);
-        // best-effort: a failed slice still advances the schedule
+        // best-effort: a failed slice still advances the schedule (already reserved)
       }
-    }
-
-    job.slicesDone += 1;
-    if (job.slicesDone >= job.slicesTotal) {
-      job.status = 'done';
-      job.endedTs = now;
-    } else {
-      job.nextRunTs = now + job.intervalMs;
     }
   }
 

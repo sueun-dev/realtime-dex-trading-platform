@@ -65,6 +65,22 @@ function userFill(t: Trade, userId: string): unknown {
   });
 }
 
+/**
+ * The PUBLIC projection of a trade for the trades:<mkt> tape — price, qty,
+ * aggressor side and time only. Never the counterparties' wallet addresses,
+ * order ids, or fees (same shape as a venue print via publishExternalTrade).
+ */
+function publicTrade(t: Trade): unknown {
+  return jsonSafe({
+    id: t.id,
+    marketId: t.marketId,
+    price: t.price,
+    qty: t.qty,
+    takerSide: t.takerSide,
+    ts: t.ts,
+  });
+}
+
 /** Per-user accumulator for one dispatch batch — the changed entities the user
  * channel ships so a client can update without a full refetch. */
 interface UserBucket {
@@ -282,7 +298,9 @@ export class WsHub implements EventSink {
     }
 
     for (const [marketId, trades] of tradesByMarket) {
-      const wires = trades.map((t) => jsonSafe(t));
+      // the public trades tape is ANONYMIZED — price/qty/aggressor only, never
+      // the counterparties' wallet addresses, order ids, or fees
+      const wires = trades.map((t) => publicTrade(t));
       const ring = this.#tradeRing.get(marketId) ?? [];
       ring.unshift(...[...wires].reverse());
       this.#tradeRing.set(marketId, ring.slice(0, TRADE_RING));

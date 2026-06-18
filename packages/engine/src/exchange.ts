@@ -591,6 +591,10 @@ export class Exchange {
       .filter((o) => o.marketId === m.id && this.triggerHit(o.trigger!, mark))
       .sort((a, b) => a.seq - b.seq);
     for (const o of due) {
+      // `due` was snapshotted before any leg fired; activating one OCO leg can
+      // cancel a sibling that is also in this list (one-cancels-other). Skip any
+      // leg that is no longer live so it is never double-activated.
+      if (!this.conditionalOrders.has(o.id)) continue;
       this.removeConditional(o);
       o.status = 'cancelled';
       this.retire(o); // keep it queryable via getOrder (bounded cache)

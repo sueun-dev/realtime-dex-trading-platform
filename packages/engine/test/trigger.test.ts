@@ -342,6 +342,28 @@ describe('OCO (one-cancels-other) orders', () => {
     t.check(ex);
   });
 
+  it('two OCO stop legs crossing in the SAME mark tick: exactly one fills (no double-execution)', () => {
+    const { ex, t } = perpSetup();
+    ex.setMarkPrice(P, u(100), TS++);
+    // two breakout buy-stops in one OCO group; a single jump crosses both triggers
+    const a = acceptedId(ex.submitOrder('alice', req(P, 'buy', 'market', undefined, u(1), { tif: 'IOC', trigger: { price: u(105), direction: 'above' }, ocoGroup: 'd' }), TS++));
+    const b = acceptedId(ex.submitOrder('alice', req(P, 'buy', 'market', undefined, u(1), { tif: 'IOC', trigger: { price: u(106), direction: 'above' }, ocoGroup: 'd' }), TS++));
+    // asks so a triggered breakout can fill
+    ex.submitOrder('bob', req(P, 'sell', 'limit', u(106), u(2)), TS++);
+
+    const evts = ex.setMarkPrice(P, u(106), TS++); // crosses BOTH 105 and 106 at once
+    // exactly one leg executes; the position is 1 unit, not 2
+    expect(evts.filter((e) => e.kind === 'trade')).toHaveLength(1);
+    expect(pos(ex, 'alice', P)?.size).toBe(u(1));
+    // the loser is cancelled exactly once (no duplicate triggered/oco cancels)
+    const cancelsForB = evts.filter((e) => e.kind === 'orderCancelled' && e.orderId === b);
+    const cancelsForA = evts.filter((e) => e.kind === 'orderCancelled' && e.orderId === a);
+    expect(cancelsForA.length + cancelsForB.length).toBeGreaterThanOrEqual(1);
+    // whichever leg didn't fill is cancelled at most once
+    expect(Math.max(cancelsForA.length, cancelsForB.length)).toBe(1);
+    t.check(ex);
+  });
+
   it('the OCO link survives a restore (filling the restored leg still cancels its sibling)', () => {
     const { ex } = perpSetup();
     ex.setMarkPrice(P, u(100), TS++);
