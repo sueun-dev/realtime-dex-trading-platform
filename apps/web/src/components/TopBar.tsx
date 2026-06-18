@@ -13,14 +13,41 @@ const WS_LABEL: Record<WsStatus, string> = {
   closed: '연결 끊김',
 };
 
+/** A 1e8 hourly funding rate as a signed percent with 4 decimals (e.g. +0.0100%). */
+function fundingPctStr(rate: bigint): string {
+  const tenKths = rate / 100n; // rate/1e8 × 100% × 10000
+  const neg = tenKths < 0n;
+  const abs = neg ? -tenKths : tenKths;
+  const frac = (abs % 10_000n).toString().padStart(4, '0');
+  return `${neg ? '-' : '+'}${abs / 10_000n}.${frac}%`;
+}
+
+/** Remaining time to the next funding as mm:ss (clamped at 0). */
+function countdownStr(nextTs: number, now: number): string {
+  const secs = Math.max(0, Math.floor((nextTs - now) / 1000));
+  const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+  const ss = String(secs % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
 export function TopBar() {
   const market = useMarketStore((s) => s.byId[s.selectedId]);
   const ticker = useMarketStore((s) => s.tickers[s.selectedId]);
+  const funding = useMarketStore((s) => s.funding[s.selectedId]);
   const setSelectorOpen = useMarketStore((s) => s.setSelectorOpen);
   const address = useAuthStore((s) => s.address);
   const login = useAuthStore((s) => s.login);
   const [connecting, setConnecting] = useState(false);
   const [wsStatus, setWsStatus] = useState<WsStatus>(() => getWs().status);
+  const isPerp = market?.type === 'perp';
+
+  // tick once a second so the funding countdown stays live (perp markets only)
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isPerp || funding === undefined) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isPerp, funding]);
 
   useEffect(() => {
     const ws = getWs();
@@ -92,6 +119,20 @@ export function TopBar() {
               {formatAmount(ticker.volume24h)} {market.quote}
             </span>
           </div>
+          {isPerp && funding !== undefined && (
+            <div className="stat" data-testid="funding-stat">
+              <span className="dim">펀딩 / 정산까지</span>
+              <span>
+                <span
+                  className={funding.rate > 0n ? 'neg' : funding.rate < 0n ? 'pos' : 'dim'}
+                  data-testid="funding-rate"
+                >
+                  {fundingPctStr(funding.rate)}
+                </span>
+                <span className="dim"> / {countdownStr(funding.nextFundingTs, now)}</span>
+              </span>
+            </div>
+          )}
         </div>
       )}
 

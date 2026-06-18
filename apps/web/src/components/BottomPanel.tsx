@@ -48,6 +48,7 @@ export function PositionsTable() {
           <th>방향</th>
           <th>크기</th>
           <th>진입가</th>
+          <th>청산가</th>
           <th>마크</th>
           <th>미실현 손익</th>
           <th>증거금</th>
@@ -74,6 +75,17 @@ export function PositionsTable() {
               </td>
               <td>{formatQty(absBig(p.size))}</td>
               <td>{formatPrice(p.entryPrice, tickSize)}</td>
+              <td>
+                {p.liquidationPrice !== null ? (
+                  <span className="neg" data-testid={`liq-${p.marketId}`}>
+                    {formatPrice(p.liquidationPrice, tickSize)}
+                  </span>
+                ) : (
+                  <span className="dim" data-testid={`liq-${p.marketId}`}>
+                    —
+                  </span>
+                )}
+              </td>
               <td>{mark !== null ? formatPrice(mark, tickSize) : <span className="dim">—</span>}</td>
               <td>
                 {uPnl !== null ? (

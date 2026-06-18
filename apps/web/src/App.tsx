@@ -1,7 +1,17 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toUnits } from '@dex/shared';
-import { api, isTickerWire, parseFill, parseMarket, parseOrder, parsePosition, parseTicker } from './lib/api.js';
+import {
+  api,
+  isFundingWire,
+  isTickerWire,
+  parseFill,
+  parseFunding,
+  parseMarket,
+  parseOrder,
+  parsePosition,
+  parseTicker,
+} from './lib/api.js';
 import type { BookLevelWire, TradeWire } from './lib/api.js';
 import { hasStoredKey, useAuthStore } from './lib/auth.js';
 import { getWs } from './lib/ws.js';
@@ -63,6 +73,11 @@ export default function App() {
       .filter((t): t is NonNullable<typeof t> => t !== null && t !== undefined && isTickerWire(t))
       .map(parseTicker);
     if (seeded.length > 0) store.setTickers(seeded);
+    for (const w of wires) {
+      if (w.funding !== null && w.funding !== undefined && isFundingWire(w.funding)) {
+        store.setFunding(parseFunding(w.funding));
+      }
+    }
     // re-read the store: `store` is the snapshot from BEFORE setMarkets ran,
     // so its byId would always be empty on first load and clobber the default
     const fresh = useMarketStore.getState();
@@ -153,6 +168,11 @@ export default function App() {
       useBookStore.getState().pushTrades(selectedId, rows);
     });
 
+    // live perp funding rate + next-settlement countdown for the selected market
+    const unFunding = ws.subscribe(`funding:${selectedId}`, (data) => {
+      if (isFundingWire(data)) useMarketStore.getState().setFunding(parseFunding(data));
+    });
+
     // REST seed so the panel isn't empty until the first WS frame
     api
       .orderbook(selectedId, 20)
@@ -175,6 +195,7 @@ export default function App() {
       unTicker();
       unBook();
       unTrades();
+      unFunding();
     };
   }, [selectedId]);
 

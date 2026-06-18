@@ -50,6 +50,9 @@ test('switches to BTC-PERP via the selector', async () => {
   // real mirrored Hyperliquid depth is live
   await expect(page.getByTestId('ask-row-0')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('spread')).toBeVisible();
+  // real Hyperliquid funding rate + next-settlement countdown for the perp
+  await expect(page.getByTestId('funding-stat')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('funding-rate')).toContainText('%');
 });
 
 test('connects wallet and claims faucet', async () => {
@@ -76,6 +79,8 @@ test('opens a 5x long with a market order against the real perp book', async () 
   await expect(row).toContainText('롱');
   await expect(row).toContainText('0.01');
   await expect(row).toContainText('5x');
+  // backend-computed liquidation price shows for the open position (gap #17)
+  await expect(page.getByTestId('liq-BTC-PERP')).toContainText(/[0-9]/, { timeout: 10_000 });
 });
 
 test('closes the position at market (reduce-only)', async () => {

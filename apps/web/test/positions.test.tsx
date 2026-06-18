@@ -17,8 +17,8 @@ beforeEach(() => {
   });
   useUserStore.setState({
     positions: [
-      { marketId: 'BTC-PERP', size: toUnits('2'), entryPrice: toUnits('100'), leverage: 4, margin: toUnits('50') },
-      { marketId: 'ETH-PERP', size: toUnits('-1'), entryPrice: toUnits('100'), leverage: 2, margin: toUnits('50') },
+      { marketId: 'BTC-PERP', size: toUnits('2'), entryPrice: toUnits('100'), leverage: 4, margin: toUnits('50'), markPrice: toUnits('110'), unrealizedPnl: toUnits('20'), liquidationPrice: toUnits('77') },
+      { marketId: 'ETH-PERP', size: toUnits('-1'), entryPrice: toUnits('100'), leverage: 2, margin: toUnits('50'), markPrice: toUnits('110'), unrealizedPnl: toUnits('-10'), liquidationPrice: toUnits('148') },
     ],
   });
 });
@@ -47,5 +47,11 @@ describe('PositionsTable uPnL', () => {
     expect(screen.getByText('롱')).toBeInTheDocument();
     expect(screen.getByText('숏')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: '시장가 종료' })).toHaveLength(2);
+  });
+
+  it('shows the liquidation price from the backend per position (gap #17)', () => {
+    renderWithQuery(<PositionsTable />);
+    expect(screen.getByTestId('liq-BTC-PERP')).toHaveTextContent('77');
+    expect(screen.getByTestId('liq-ETH-PERP')).toHaveTextContent('148');
   });
 });

@@ -82,6 +82,7 @@ export function seedMarkets(markets: Market[], selectedId: string): void {
     selectedId,
     selectorOpen: false,
     tickers: {},
+    funding: {},
   });
 }
 

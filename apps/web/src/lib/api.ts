@@ -109,6 +109,14 @@ export interface TickerWire {
   ts: number;
 }
 
+export interface FundingWire {
+  marketId: string;
+  rate: string;
+  intervalMs: number;
+  nextFundingTs: number;
+  ts: number;
+}
+
 export interface MarketWire {
   id: string;
   type: MarketType;
@@ -123,6 +131,8 @@ export interface MarketWire {
   takerFeeBps: number;
   maxLeverage: number;
   ticker?: TickerWire | null;
+  funding?: FundingWire | null;
+  mark?: string | null;
 }
 
 export interface BookLevelWire {
@@ -170,6 +180,9 @@ export interface PositionWire {
   entryPrice: string;
   leverage: number;
   margin: string;
+  markPrice?: string;
+  unrealizedPnl?: string;
+  liquidationPrice?: string | null;
 }
 
 export interface AccountWire {
@@ -256,12 +269,25 @@ export interface TickerData {
   ts: number;
 }
 
+export interface FundingData {
+  marketId: string;
+  /** funding rate for one interval, 1e8 units */
+  rate: bigint;
+  intervalMs: number;
+  nextFundingTs: number;
+  ts: number;
+}
+
 export interface PositionData {
   marketId: string;
   size: bigint;
   entryPrice: bigint;
   leverage: number;
   margin: bigint;
+  /** live mark + risk fields (perp positions; absent on legacy/spot snapshots) */
+  markPrice: bigint | null;
+  unrealizedPnl: bigint | null;
+  liquidationPrice: bigint | null;
 }
 
 export interface TriggerData {
@@ -331,6 +357,22 @@ export function isTickerWire(d: unknown): d is TickerWire {
   return typeof o['marketId'] === 'string' && typeof o['price'] === 'string';
 }
 
+export function parseFunding(w: FundingWire): FundingData {
+  return {
+    marketId: w.marketId,
+    rate: toUnits(w.rate),
+    intervalMs: w.intervalMs,
+    nextFundingTs: w.nextFundingTs,
+    ts: w.ts,
+  };
+}
+
+export function isFundingWire(d: unknown): d is FundingWire {
+  if (d === null || typeof d !== 'object') return false;
+  const o = d as Record<string, unknown>;
+  return typeof o['marketId'] === 'string' && typeof o['rate'] === 'string' && typeof o['nextFundingTs'] === 'number';
+}
+
 export function parsePosition(w: PositionWire): PositionData {
   return {
     marketId: w.marketId,
@@ -338,6 +380,13 @@ export function parsePosition(w: PositionWire): PositionData {
     entryPrice: toUnits(w.entryPrice),
     leverage: w.leverage,
     margin: toUnits(w.margin),
+    markPrice: w.markPrice === undefined || w.markPrice === null ? null : toUnits(w.markPrice),
+    unrealizedPnl:
+      w.unrealizedPnl === undefined || w.unrealizedPnl === null ? null : toUnits(w.unrealizedPnl),
+    liquidationPrice:
+      w.liquidationPrice === undefined || w.liquidationPrice === null
+        ? null
+        : toUnits(w.liquidationPrice),
   };
 }
 
