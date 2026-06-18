@@ -193,6 +193,25 @@ export interface LiquidationRecord {
   ts: number;
 }
 
+/** A running/finished TWAP parent order, as surfaced to its owner. */
+export interface TwapJobView {
+  id: string;
+  marketId: string;
+  side: Side;
+  totalQty: bigint;
+  filledQty: bigint;
+  sliceQty: bigint;
+  slicesDone: number;
+  slicesTotal: number;
+  type: OrderType;
+  limitPrice: bigint | null;
+  intervalMs: number;
+  /** epoch ms of the next scheduled slice (0 once finished) */
+  nextRunTs: number;
+  status: 'running' | 'done' | 'cancelled';
+  createdTs: number;
+}
+
 export interface FundingInfo {
   marketId: string;
   /** funding rate for one interval, 1e8 units (0.0001 → 1e4); sign = longs pay shorts when positive */

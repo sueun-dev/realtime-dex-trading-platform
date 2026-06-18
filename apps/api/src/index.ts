@@ -16,6 +16,7 @@ async function main(): Promise<void> {
     feeds: true,
     marketMaker: true,
     funding: true,
+    twap: true,
     retention: true,
     // a projection failure means engine and durable store have diverged — exit
     // non-zero so the supervisor restarts and boot-restore re-establishes a

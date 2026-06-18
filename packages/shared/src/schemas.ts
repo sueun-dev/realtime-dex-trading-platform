@@ -111,6 +111,30 @@ export const zLeverageRequest = z.object({
   leverage: z.number().int().min(1).max(100),
 });
 
+/**
+ * A TWAP (time-weighted average price) parent order: slice `totalQty` into
+ * `slices` equal child orders spread evenly across `durationMs`. Each child is
+ * a market order by default, or a limit order capped at `limitPrice`.
+ */
+export const zTwapRequest = z
+  .object({
+    marketId: zMarketId,
+    side: zSide,
+    totalQty: zPositiveUnits,
+    durationMs: z.number().int().min(1_000).max(24 * 60 * 60_000),
+    slices: z.number().int().min(2).max(500),
+    type: zOrderType.default('market'),
+    limitPrice: zPositiveUnits.optional(),
+    reduceOnly: z.boolean().default(false),
+  })
+  .superRefine((o, ctx) => {
+    if (o.type === 'limit' && o.limitPrice === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'limit TWAP requires limitPrice', path: ['limitPrice'] });
+    }
+  });
+
+export type TwapRequestInput = z.input<typeof zTwapRequest>;
+
 export const zAuthNonceRequest = z.object({ address: zEthAddress });
 export const zAuthVerifyRequest = z.object({
   address: zEthAddress,

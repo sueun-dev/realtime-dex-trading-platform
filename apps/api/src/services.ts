@@ -16,6 +16,7 @@ import { WsHub } from './wsHub.js';
 import { startFeeds } from './feeds.js';
 import { startBookMirror } from './bookMirror.js';
 import { startFunding } from './funding.js';
+import { TwapScheduler, startTwap } from './twap.js';
 import { startRetention } from './retention.js';
 
 export interface Stoppable {
@@ -32,6 +33,8 @@ export interface ServiceOptions {
   /** mirror the REAL source-venue orderbooks into the engine (house liquidity) */
   marketMaker?: boolean;
   funding?: boolean;
+  /** run the TWAP slice scheduler on a wall-clock ticker (tests drive tick() directly) */
+  twap?: boolean;
   /** periodic retention GC of the durable projection (bounds DB growth under mirror churn) */
   retention?: boolean;
   /** invoked when the pipeline poisons (projection failure); production halts the process */
@@ -65,6 +68,7 @@ export interface Services {
   pipeline: Pipeline;
   priceCache: PriceCache;
   candles: CandleService;
+  twap: TwapScheduler;
   upbit: UpbitRest;
   hl: HyperliquidRest;
   rateLimit: RateLimitConfig | false;
@@ -156,6 +160,7 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
     pipeline,
     priceCache,
     candles,
+    twap: undefined as unknown as TwapScheduler, // assigned just below (needs `services`)
     upbit,
     hl,
     rateLimit: opts.rateLimit ?? false,
@@ -170,9 +175,12 @@ export async function buildServices(opts: ServiceOptions): Promise<Services> {
     },
   };
 
+  services.twap = new TwapScheduler(services);
+
   if (opts.feeds) stoppables.push(startFeeds(services));
   if (opts.marketMaker) stoppables.push(startBookMirror(services));
   if (opts.funding) stoppables.push(startFunding(services));
+  if (opts.twap) stoppables.push(startTwap(services, services.twap));
   if (opts.retention) stoppables.push(startRetention(services));
 
   return services;

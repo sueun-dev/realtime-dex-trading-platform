@@ -15,6 +15,7 @@ import { registerMarketRoutes } from './routes/markets.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerAccountRoutes } from './routes/account.js';
 import { registerOrderRoutes } from './routes/orders.js';
+import { registerTwapRoutes } from './routes/twap.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -120,6 +121,7 @@ export async function buildApp(svc: Services): Promise<FastifyInstance> {
   registerAuthRoutes(app, svc, svc.rateLimit === false ? undefined : svc.rateLimit.authMax);
   registerAccountRoutes(app, svc, authenticate);
   registerOrderRoutes(app, svc, authenticate, metrics);
+  registerTwapRoutes(app, svc, authenticate);
 
   return app;
 }
