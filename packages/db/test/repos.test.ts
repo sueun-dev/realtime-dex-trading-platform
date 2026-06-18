@@ -303,6 +303,28 @@ describe('trailing-stop persistence', () => {
   });
 });
 
+describe('OCO group persistence', () => {
+  it('persists oco_group on orders and restores it for the engine OCO map', async () => {
+    const { projector, repos } = await setup();
+    const o = mkOrder({
+      id: 'oco1',
+      userId: ALICE,
+      marketId: SPOT,
+      side: 'buy',
+      price: SCALE,
+      qty: SCALE,
+      status: 'open',
+      seq: 1,
+      ts: 1,
+      ocoGroup: 'bracket-7',
+    });
+    await projector.applyBatch([{ kind: 'orderAccepted', seq: 1, ts: 1, order: o }] as EngineEvent[]);
+    expect((await repos.orders.byId('oco1'))?.ocoGroup).toBe('bracket-7');
+    const state = await repos.loadRestoreState();
+    expect(state.openOrders.find((x) => x.id === 'oco1')?.ocoGroup).toBe('bracket-7');
+  });
+});
+
 describe('perpHistory repo (funding + liquidations)', () => {
   it('fundingForUser + liquidationsForUser: newest first, seq-cursor paginated', async () => {
     const { projector, repos } = await setup();

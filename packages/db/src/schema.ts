@@ -86,6 +86,8 @@ export const orders = pgTable(
     triggerDirection: text('trigger_direction').$type<'above' | 'below'>(),
     /** trailing-stop distance; null for a fixed-price trigger */
     triggerTrail: money('trigger_trail'),
+    /** OCO link label; null when the order is not part of an OCO group */
+    ocoGroup: text('oco_group'),
     seq: bigint('seq', { mode: 'number' }).notNull(),
     ts: bigint('ts', { mode: 'number' }).notNull(),
   },

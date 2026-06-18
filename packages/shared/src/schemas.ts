@@ -45,6 +45,8 @@ export const zOrderRequest = z
     triggerDirection: z.enum(['above', 'below']).optional(),
     /** trailing-stop distance (1e8); when set the order trails the ref price */
     trailDistance: zPositiveUnits.optional(),
+    /** OCO group label: filling one order in the group cancels the others */
+    ocoGroup: z.string().min(1).max(64).optional(),
   })
   .superRefine((o, ctx) => {
     if (o.type === 'limit' && o.price === undefined) {
@@ -91,6 +93,7 @@ export function parseOrderRequest(input: unknown): OrderRequest {
   };
   if (parsed.price !== undefined) req.price = parsed.price;
   if (parsed.clientOrderId !== undefined) req.clientOrderId = parsed.clientOrderId;
+  if (parsed.ocoGroup !== undefined) req.ocoGroup = parsed.ocoGroup;
   if (
     parsed.triggerDirection !== undefined &&
     (parsed.triggerPrice !== undefined || parsed.trailDistance !== undefined)

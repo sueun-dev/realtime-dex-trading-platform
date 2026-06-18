@@ -22,6 +22,10 @@ function openLong(ex: Exchange, price: bigint, qty: bigint): void {
   if (trades(e).length === 0) throw new Error('openLong did not fill');
 }
 const pos = (ex: Exchange, u2: string, m: string) => ex.getPosition(u2, m);
+const usdc = (ex: Exchange, user: string): { available: bigint; locked: bigint } => {
+  const b = ex.getBalances(user).find((x) => x.asset === 'USDC');
+  return b ? { available: b.available, locked: b.locked } : { available: 0n, locked: 0n };
+};
 
 describe('conditional (stop / take-profit) orders', () => {
   it('a stop order rests untriggered, locks nothing, and shows in open orders', () => {
@@ -272,5 +276,98 @@ describe('trailing-stop orders', () => {
       lastSeq: ratcheted.seq,
     });
     expect(ex2.getOrder(id)!.trigger).toEqual({ price: u(140), direction: 'below', trail: u(10) });
+  });
+});
+
+describe('OCO (one-cancels-other) orders', () => {
+  it('TP limit fill cancels the linked SL stop leg', () => {
+    const { ex, t } = perpSetup();
+    openLong(ex, u(100), u(1)); // alice long 1
+    ex.setMarkPrice(P, u(100), TS++);
+    const tp = acceptedId(
+      ex.submitOrder('alice', req(P, 'sell', 'limit', u(110), u(1), { reduceOnly: true, ocoGroup: 'x' }), TS++),
+    );
+    const sl = acceptedId(
+      ex.submitOrder(
+        'alice',
+        req(P, 'sell', 'market', undefined, u(1), { tif: 'IOC', reduceOnly: true, trigger: { price: u(90), direction: 'below' }, ocoGroup: 'x' }),
+        TS++,
+      ),
+    );
+    expect(ex.getOrder(tp)!.status).toBe('open');
+    expect(ex.getOrder(sl)!.status).toBe('untriggered');
+
+    // carol lifts the take-profit → it fills → the stop leg is cancelled (oco)
+    const evts = ex.submitOrder('carol', req(P, 'buy', 'limit', u(110), u(1)), TS++);
+    expect(evts.some((e) => e.kind === 'orderCancelled' && e.orderId === sl && e.reason === 'oco')).toBe(true);
+    expect(ex.getOrder(sl)!.status).toBe('cancelled');
+    expect(pos(ex, 'alice', P)).toBeUndefined(); // long closed by the TP
+    t.check(ex);
+  });
+
+  it('a triggered stop leg that fills cancels its resting OCO limit sibling', () => {
+    const { ex, t } = perpSetup();
+    ex.setMarkPrice(P, u(100), TS++);
+    // OCO entry: a dip buy-limit @95 OR a breakout buy-stop above 105 — whichever
+    // hits first cancels the other (no reduceOnly, so no position-cap confound)
+    const dip = acceptedId(ex.submitOrder('alice', req(P, 'buy', 'limit', u(95), u(1), { ocoGroup: 'z' }), TS++));
+    ex.submitOrder('alice', req(P, 'buy', 'market', undefined, u(1), { tif: 'IOC', trigger: { price: u(105), direction: 'above' }, ocoGroup: 'z' }), TS++);
+    // an ask so the triggered breakout buy can fill
+    ex.submitOrder('bob', req(P, 'sell', 'limit', u(105), u(1)), TS++);
+
+    const evts = ex.setMarkPrice(P, u(105), TS++); // breakout fires → fills → dip leg cancels
+    expect(evts.some((e) => e.kind === 'orderCancelled' && e.orderId === dip && e.reason === 'oco')).toBe(true);
+    expect(ex.getOrder(dip)!.status).toBe('cancelled');
+    expect(pos(ex, 'alice', P)?.size).toBe(u(1)); // the breakout leg established the long
+    expect(usdc(ex, 'alice').locked).toBe(0n); // the cancelled dip leg's lock returned
+    t.check(ex);
+  });
+
+  it('two resting limits in one group: filling one releases + cancels the other (lock freed)', () => {
+    const { ex, t } = perpSetup();
+    ex.setMarkPrice(P, u(100), TS++);
+    // two OCO buy limits; only one should ever rest as a position
+    const a = acceptedId(ex.submitOrder('alice', req(P, 'buy', 'limit', u(95), u(1), { ocoGroup: 'g' }), TS++));
+    const b = acceptedId(ex.submitOrder('alice', req(P, 'buy', 'limit', u(94), u(1), { ocoGroup: 'g' }), TS++));
+    const lockedBoth = usdc(ex, 'alice').locked;
+    expect(lockedBoth).toBeGreaterThan(0n);
+
+    // carol sells into the @95 buy → it fills → @94 cancels (oco) and its lock frees
+    const evts = ex.submitOrder('carol', req(P, 'sell', 'limit', u(95), u(1)), TS++);
+    expect(evts.some((e) => e.kind === 'orderCancelled' && e.orderId === b && e.reason === 'oco')).toBe(true);
+    expect(ex.getOrder(a)!.status).toBe('filled');
+    expect(ex.getOrder(b)!.status).toBe('cancelled');
+    // only the filled leg's margin remains locked-as-margin; the cancelled leg's lock returned
+    expect(usdc(ex, 'alice').locked).toBe(0n);
+    t.check(ex);
+  });
+
+  it('the OCO link survives a restore (filling the restored leg still cancels its sibling)', () => {
+    const { ex } = perpSetup();
+    ex.setMarkPrice(P, u(100), TS++);
+    const a = acceptedId(ex.submitOrder('alice', req(P, 'buy', 'limit', u(95), u(1), { ocoGroup: 'r' }), TS++));
+    const b = acceptedId(ex.submitOrder('alice', req(P, 'buy', 'limit', u(94), u(1), { ocoGroup: 'r' }), TS++));
+    const orders = [ex.getOrder(a)!, ex.getOrder(b)!];
+    expect(orders.every((o) => o.ocoGroup === 'r')).toBe(true);
+
+    const ex2 = newExchange();
+    ex2.restoreState({
+      balances: [
+        { userId: 'alice', asset: 'USDC', available: u(100_000), locked: u(189) },
+        { userId: 'carol', asset: 'USDC', available: u(100_000), locked: 0n },
+      ],
+      positions: [],
+      leverages: [
+        { userId: 'alice', marketId: P, leverage: 5 },
+        { userId: 'carol', marketId: P, leverage: 5 },
+      ],
+      openOrders: orders,
+      markPrices: [{ marketId: P, price: u(100) }],
+      lastSeq: orders[1]!.seq,
+    });
+    // fill the restored @95 leg → the restored @94 leg cancels via the rebuilt OCO map
+    const evts = ex2.submitOrder('carol', req(P, 'sell', 'limit', u(95), u(1)), TS++);
+    expect(evts.some((e) => e.kind === 'orderCancelled' && e.orderId === b && e.reason === 'oco')).toBe(true);
+    expect(ex2.getOrder(b)!.status).toBe('cancelled');
   });
 });

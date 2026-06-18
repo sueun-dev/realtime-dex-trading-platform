@@ -73,6 +73,8 @@ export class Exchange {
   /** untriggered conditional (stop/take-profit) orders, by id; lock nothing until they fire */
   private readonly conditionalOrders = new Map<string, EngineOrder>();
   private readonly conditionalByUser = new Map<string, Set<string>>();
+  /** OCO link → live member order ids; filling one member cancels the others */
+  private readonly ocoMembers = new Map<string, Set<string>>();
   /** last trade/reference price per market, for evaluating spot triggers */
   private readonly lastPrices = new Map<string, bigint>();
   private seqCounter = 0;
@@ -288,6 +290,7 @@ export class Exchange {
       reduceOnly,
       clientOrderId: req.clientOrderId ?? null,
       trigger: null,
+      ocoGroup: req.ocoGroup ?? null,
       seq: s,
       ts,
       lockRemaining: required,
@@ -334,8 +337,11 @@ export class Exchange {
           }
           cids.set(order.clientOrderId, order.id);
         }
+        this.registerOco(order); // a resting leg can be cancelled by its OCO sibling
       }
     }
+    // OCO: if this order filled a leg of an OCO group, cancel the sibling leg(s)
+    this.enforceOco(evts, ts);
     return evts;
   }
 
@@ -428,6 +434,7 @@ export class Exchange {
         direction: trig.direction,
         ...(trig.trail !== undefined ? { trail: trig.trail } : {}),
       },
+      ocoGroup: req.ocoGroup ?? null,
       seq: s,
       ts,
       lockRemaining: 0n,
@@ -436,6 +443,7 @@ export class Exchange {
       resting: false,
     };
     this.conditionalOrders.set(order.id, order);
+    this.registerOco(order); // a dormant stop leg can be cancelled by its OCO sibling
     let set = this.conditionalByUser.get(userId);
     if (!set) {
       set = new Set();
@@ -462,6 +470,87 @@ export class Exchange {
     this.conditionalOrders.delete(o.id);
     this.conditionalByUser.get(o.userId)?.delete(o.id);
     if (o.clientOrderId !== null) this.clientIds.get(o.userId)?.delete(o.clientOrderId);
+  }
+
+  // ----------------------------------------------------------- OCO linkage
+
+  private ocoKey(userId: string, group: string): string {
+    return `${userId} ${group}`;
+  }
+
+  /** Track a live (resting or conditional) order as an OCO group member. */
+  private registerOco(o: EngineOrder): void {
+    if (o.ocoGroup === null) return;
+    const key = this.ocoKey(o.userId, o.ocoGroup);
+    let set = this.ocoMembers.get(key);
+    if (!set) {
+      set = new Set();
+      this.ocoMembers.set(key, set);
+    }
+    set.add(o.id);
+  }
+
+  /** Untrack an order from its OCO group (on any terminal transition). */
+  private unregisterOco(o: EngineOrder): void {
+    if (o.ocoGroup === null) return;
+    const key = this.ocoKey(o.userId, o.ocoGroup);
+    const set = this.ocoMembers.get(key);
+    if (!set) return;
+    set.delete(o.id);
+    if (set.size === 0) this.ocoMembers.delete(key);
+  }
+
+  /**
+   * One-cancels-other: for every OCO group with an order that just FILLED in
+   * `evts`, cancel the group's other still-live members (the resting limit leg
+   * and/or the untriggered stop leg). The filled leg itself is left alone (it may
+   * still be partially resting). Idempotent — a resolved group is dropped.
+   */
+  private enforceOco(evts: EngineEvent[], ts: number): void {
+    const filledByGroup = new Map<string, Set<string>>(); // groupKey → filled member ids
+    for (const e of evts) {
+      if (e.kind !== 'trade') continue;
+      for (const o of [e.takerOrder, e.makerOrder]) {
+        if (o.ocoGroup === null) continue;
+        const key = this.ocoKey(o.userId, o.ocoGroup);
+        let s = filledByGroup.get(key);
+        if (!s) {
+          s = new Set();
+          filledByGroup.set(key, s);
+        }
+        s.add(o.id);
+      }
+    }
+    for (const [key, filledIds] of filledByGroup) {
+      const members = this.ocoMembers.get(key);
+      if (!members) continue;
+      for (const oid of [...members]) {
+        if (filledIds.has(oid)) continue; // never cancel the leg that executed
+        const open = this.orders.get(oid);
+        if (open && open.status === 'open') {
+          this.cancelInternal(this.markets.get(open.marketId)!, open, 'oco', evts, ts);
+          continue;
+        }
+        const cond = this.conditionalOrders.get(oid);
+        if (cond) {
+          this.removeConditional(cond);
+          this.unregisterOco(cond);
+          cond.status = 'cancelled';
+          this.retire(cond);
+          evts.push({
+            kind: 'orderCancelled',
+            seq: this.nextSeq(),
+            ts,
+            orderId: cond.id,
+            userId: cond.userId,
+            marketId: cond.marketId,
+            remainingQty: remainingQty(cond),
+            reason: 'oco',
+          });
+        }
+      }
+      this.ocoMembers.delete(key); // the group is resolved
+    }
   }
 
   /**
@@ -523,6 +612,9 @@ export class Exchange {
         tif: o.tif,
         postOnly: o.postOnly,
         reduceOnly: o.reduceOnly,
+        // carry the OCO link onto the activated order so filling it still
+        // cancels the sibling leg
+        ...(o.ocoGroup !== null ? { ocoGroup: o.ocoGroup } : {}),
       };
       if (o.price !== null) activation.price = o.price;
       // a stop-MARKET with no preset bound derives a worst price from the live book
@@ -548,6 +640,7 @@ export class Exchange {
   /** Move a now-terminal order out of the live map into the bounded cache. */
   private retire(o: EngineOrder): void {
     this.orders.delete(o.id);
+    this.unregisterOco(o); // a terminal order is no longer an OCO member
     if (o.clientOrderId !== null) {
       const cids = this.clientIds.get(o.userId);
       if (cids?.get(o.clientOrderId) === o.id) {
@@ -1089,6 +1182,8 @@ export class Exchange {
       tif: 'GTC',
       postOnly: false,
       reduceOnly: o.reduceOnly,
+      // an amended leg keeps its OCO link so the sibling still cancels on fill
+      ...(o.ocoGroup !== null ? { ocoGroup: o.ocoGroup } : {}),
     };
     evts.push(...this.submitOrder(userId, replacement, ts));
     return evts;
@@ -1483,6 +1578,7 @@ export class Exchange {
       }
       const eo: EngineOrder = { ...o, lockRemaining, lockAsset, leverage, resting: true };
       this.orders.set(eo.id, eo);
+      this.registerOco(eo);
       ms.book.side(eo.side).insert(eo);
       let set = this.openByUser.get(eo.userId);
       if (!set) {
@@ -1511,6 +1607,7 @@ export class Exchange {
       const leverage = this.leverageOf(o.userId, o.marketId);
       const eo: EngineOrder = { ...o, lockRemaining: 0n, lockAsset: null, leverage, resting: false };
       this.conditionalOrders.set(eo.id, eo);
+      this.registerOco(eo);
       let set = this.conditionalByUser.get(eo.userId);
       if (!set) {
         set = new Set();

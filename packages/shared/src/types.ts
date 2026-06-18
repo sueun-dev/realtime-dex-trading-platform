@@ -59,6 +59,8 @@ export interface OrderRequest {
   clientOrderId?: string;
   /** when set, the order is conditional: dormant until the mark crosses the trigger */
   trigger?: TriggerSpec;
+  /** OCO link label: when any order sharing this group fills, the others cancel */
+  ocoGroup?: string;
 }
 
 export interface Order {
@@ -78,6 +80,8 @@ export interface Order {
   clientOrderId: string | null;
   /** conditional trigger; null for a normal order */
   trigger: TriggerSpec | null;
+  /** OCO link label; null when the order is not part of an OCO group */
+  ocoGroup: string | null;
   /** engine sequence at acceptance — total order over all events */
   seq: number;
   /** epoch ms, supplied by caller (engine is deterministic) */

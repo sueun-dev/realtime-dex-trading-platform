@@ -124,4 +124,5 @@ describe('stop / take-profit orders via the API', () => {
     });
     expect(res.statusCode).toBe(422);
   });
+
 });

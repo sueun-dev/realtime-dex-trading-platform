@@ -59,6 +59,7 @@ export function req(
     reduceOnly?: boolean;
     clientOrderId?: string;
     trigger?: { price: bigint; direction: 'above' | 'below'; trail?: bigint };
+    ocoGroup?: string;
   } = {},
 ): OrderRequest {
   const r: OrderRequest = {
@@ -73,6 +74,7 @@ export function req(
   if (price !== undefined) r.price = price;
   if (opts.clientOrderId !== undefined) r.clientOrderId = opts.clientOrderId;
   if (opts.trigger !== undefined) r.trigger = opts.trigger;
+  if (opts.ocoGroup !== undefined) r.ocoGroup = opts.ocoGroup;
   return r;
 }
 

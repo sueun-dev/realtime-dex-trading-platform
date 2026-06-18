@@ -69,6 +69,7 @@ function toOrder(r: OrderSelect): Order {
             ...(r.triggerTrail !== null ? { trail: r.triggerTrail } : {}),
           }
         : null,
+    ocoGroup: r.ocoGroup,
     seq: r.seq,
     ts: r.ts,
   };

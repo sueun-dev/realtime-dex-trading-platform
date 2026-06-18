@@ -94,6 +94,7 @@ function orderRow(o: Order): typeof s.orders.$inferInsert {
     triggerPrice: o.trigger ? o.trigger.price : null,
     triggerDirection: o.trigger ? o.trigger.direction : null,
     triggerTrail: o.trigger?.trail ?? null,
+    ocoGroup: o.ocoGroup,
     seq: o.seq,
     ts: o.ts,
   };

@@ -131,6 +131,7 @@ export interface OrderBody {
   triggerDirection?: 'above' | 'below';
   trailDistance?: string;
   clientOrderId?: string;
+  ocoGroup?: string;
 }
 
 export async function placeOrder(

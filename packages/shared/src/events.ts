@@ -7,7 +7,8 @@ export type CancelReason =
   | 'liquidation'
   | 'slippage'
   | 'bookExhausted'
-  | 'triggered';
+  | 'triggered'
+  | 'oco';
 
 export type BalanceReason =
   | 'deposit'
