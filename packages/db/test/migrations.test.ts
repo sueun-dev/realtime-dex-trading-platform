@@ -88,6 +88,24 @@ describe('migrations', () => {
     expect(col.rows[0]?.is_nullable).toBe('NO');
   });
 
+  it('additively adds trigger_trail to a pre-existing orders table on re-migrate', async () => {
+    handle = await createDb();
+    // simulate a DB created before trailing stops: remove the column
+    await handle.pglite.exec('ALTER TABLE orders DROP COLUMN trigger_trail;');
+    const before = await handle.pglite.query(
+      `select column_name from information_schema.columns
+       where table_name = 'orders' and column_name = 'trigger_trail'`,
+    );
+    expect(before.rows).toHaveLength(0); // gone
+
+    await runMigrations(handle.pglite); // idempotent re-run restores it via ALTER … IF NOT EXISTS
+    const after = await handle.pglite.query(
+      `select column_name from information_schema.columns
+       where table_name = 'orders' and column_name = 'trigger_trail'`,
+    );
+    expect(after.rows).toHaveLength(1); // additive migration re-added it
+  });
+
   it('money columns are numeric(38,0)', async () => {
     handle = await createDb();
     const cols = await handle.pglite.query<{

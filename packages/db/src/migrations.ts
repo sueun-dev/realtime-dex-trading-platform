@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS orders (
   seq bigint NOT NULL,
   ts bigint NOT NULL
 );
+-- additive column migration for DBs created before trailing stops existed
+-- (CREATE TABLE IF NOT EXISTS above is a no-op on an existing table)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS trigger_trail numeric(38,0);
 CREATE INDEX IF NOT EXISTS orders_user_status_idx ON orders (user_id, status);
 CREATE INDEX IF NOT EXISTS orders_market_status_idx ON orders (market_id, status);
 CREATE INDEX IF NOT EXISTS orders_market_seq_idx ON orders (market_id, seq);
