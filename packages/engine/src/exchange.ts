@@ -26,13 +26,14 @@ import {
   type OrderRequest,
   type OrderbookSnapshot,
   type Position,
+  type PositionView,
   type Side,
   type Trade,
   type TriggerSpec,
 } from '@dex/shared';
 import { Ledger } from './ledger.js';
 import { OrderBook, remainingQty, toPublicOrder, type EngineOrder } from './orderbook.js';
-import { PositionBook, maintenanceMargin, unrealizedPnl, vwapEntry } from './perp.js';
+import { PositionBook, liquidationPrice, maintenanceMargin, unrealizedPnl, vwapEntry } from './perp.js';
 import { perpLock, spotBuyLock, spotSellLock } from './locks.js';
 
 interface MarketState {
@@ -1354,15 +1355,24 @@ export class Exchange {
     const usdc = this.ledger.get(userId, 'USDC');
     let marginUsed = 0n;
     let upnlSum = 0n;
+    const views: PositionView[] = [];
     for (const p of positions) {
       marginUsed += p.margin;
       const mark = this.markPrices.get(p.marketId) ?? p.entryPrice;
-      upnlSum += unrealizedPnl(p, mark);
+      const upnl = unrealizedPnl(p, mark);
+      upnlSum += upnl;
+      const cfg = this.markets.get(p.marketId)?.config;
+      views.push({
+        ...p,
+        markPrice: mark,
+        unrealizedPnl: upnl,
+        liquidationPrice: cfg ? liquidationPrice(p, cfg) : null,
+      });
     }
     return {
       address: userId,
       balances: this.getBalances(userId),
-      positions,
+      positions: views,
       perpEquity: usdc.available + usdc.locked + marginUsed + upnlSum,
       marginUsed,
     };

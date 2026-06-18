@@ -4,12 +4,15 @@
 import {
   absBig,
   divRound,
+  divUnits,
   maxBig,
   mulUnits,
   toUnits,
   type MarketConfig,
   type Position,
 } from '@dex/shared';
+
+const SCALE = toUnits('1'); // 1e8 fixed-point unit
 
 /**
  * Tiered maintenance-margin RATE floor by position notional (USDC), like a real
@@ -90,6 +93,35 @@ export function maintenanceMargin(pos: Position, mark: bigint, m: MarketConfig):
   const rate = tieredMmRate(notional);
   if (rate === 0n) return base;
   return maxBig(base, mulUnits(notional, rate, 'ceil'));
+}
+
+/**
+ * Isolated liquidation price: the mark at which equity (margin + uPnL) falls to
+ * the maintenance margin. Solved closed-form using the maintenance-margin tier
+ * at the position's ENTRY notional (the standard fixed-bracket approximation —
+ * the live tier could differ slightly near the boundary). Returns null when an
+ * adverse move to a positive price can never liquidate the position (e.g. a long
+ * whose margin already exceeds its entry notional).
+ *
+ *   long:  P = (s·entry − margin) / (s·(1 − r))
+ *   short: P = (s·entry + margin) / (s·(1 + r))   with s = |size|, r = MM rate
+ */
+export function liquidationPrice(pos: Position, m: MarketConfig): bigint | null {
+  const s = absBig(pos.size);
+  if (s === 0n) return null;
+  const notional = mulUnits(pos.entryPrice, s);
+  const baseRate = divRound(SCALE, 2n * BigInt(m.maxLeverage), 'ceil');
+  const r = maxBig(baseRate, tieredMmRate(notional)); // effective MM rate (1e8)
+  if (pos.size > 0n) {
+    const den = mulUnits(s, SCALE - r);
+    if (den <= 0n) return null;
+    const liq = divUnits(notional - pos.margin, den);
+    return liq > 0n ? liq : null;
+  }
+  const den = mulUnits(s, SCALE + r);
+  if (den <= 0n) return null;
+  const liq = divUnits(notional + pos.margin, den);
+  return liq > 0n ? liq : null;
 }
 
 /** Volume-weighted entry after adding `q` at price `p` to `oldAbs` at `oldEntry`. */

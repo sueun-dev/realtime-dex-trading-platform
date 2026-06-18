@@ -34,6 +34,7 @@ export function registerMarketRoutes(app: FastifyInstance, svc: Services): void 
       ...(jsonSafe(m) as Record<string, unknown>),
       ticker: hub.getTicker(m.id) ?? null,
       funding: m.type === 'perp' ? (hub.getFunding(m.id) ?? null) : null,
+      mark: m.type === 'perp' ? jsonSafe(engine.getMarkPrice(m.id) ?? null) : null,
     }));
   });
 
@@ -46,6 +47,17 @@ export function registerMarketRoutes(app: FastifyInstance, svc: Services): void 
     if (!m) throw new DexError('MARKET_NOT_FOUND', `unknown market ${id}`);
     const f = hub.getFunding(id);
     return f ?? reply.status(404).send({ error: 'no funding data yet' });
+  });
+
+  // manipulation-resistant perp mark price (median+EMA of HL/OKX/Coinbase) — the
+  // number that drives liquidation, funding, and unrealized PnL
+  app.get('/api/markets/:id/mark', (req, reply) => {
+    const { id } = req.params as { id: string };
+    const m = engine.getMarket(id);
+    if (!m) throw new DexError('MARKET_NOT_FOUND', `unknown market ${id}`);
+    const mark = engine.getMarkPrice(id);
+    if (mark === undefined) return reply.status(404).send({ error: 'no mark price yet' });
+    return jsonSafe({ marketId: id, price: mark, ts: Date.now() });
   });
 
   app.get('/api/markets/:id/orderbook', (req) => {

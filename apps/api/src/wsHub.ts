@@ -64,6 +64,7 @@ export class WsHub implements EventSink {
   readonly #tradeRing = new Map<string, unknown[]>();
   readonly #tickers = new Map<string, unknown>();
   readonly #funding = new Map<string, unknown>();
+  readonly #marks = new Map<string, unknown>();
   #tickerQueue = new Map<string, unknown>();
   readonly #dirtyBooks = new Set<string>();
   /** per-channel monotonic frame counter, stamped onto every outbound frame */
@@ -154,6 +155,7 @@ export class WsHub implements EventSink {
   /** EventSink: fan engine events out to subscribers. */
   dispatch(events: EngineEvent[]): void {
     const tradesByMarket = new Map<string, Trade[]>();
+    const marksByMarket = new Map<string, { marketId: string; price: bigint; ts: number }>();
     const touchedUsers = new Map<string, Set<string>>(); // userId -> event kinds
     const touch = (userId: string, kind: string): void => {
       if (INTERNAL_ACCOUNTS.has(userId)) return;
@@ -203,8 +205,16 @@ export class WsHub implements EventSink {
           touch(e.userId, 'funding');
           break;
         case 'markPrice':
+          // keep only the latest mark per market in this batch
+          marksByMarket.set(e.marketId, { marketId: e.marketId, price: e.price, ts: e.ts });
           break;
       }
+    }
+
+    for (const [marketId, mark] of marksByMarket) {
+      const wire = jsonSafe(mark);
+      this.#marks.set(marketId, wire);
+      this.#broadcast(`markPrice:${marketId}`, wire);
     }
 
     for (const [marketId, trades] of tradesByMarket) {
@@ -254,6 +264,11 @@ export class WsHub implements EventSink {
 
   allFunding(): unknown[] {
     return [...this.#funding.values()];
+  }
+
+  /** Latest mark price (wire form) for a market, if one has been broadcast. */
+  getMark(marketId: string): unknown {
+    return this.#marks.get(marketId);
   }
 
   recentTrades(marketId: string): unknown[] {
@@ -379,6 +394,9 @@ export class WsHub implements EventSink {
     } else if (channel.startsWith('funding:')) {
       const f = this.#funding.get(channel.slice('funding:'.length));
       if (f !== undefined) this.#sendSnapshot(conn, channel, f);
+    } else if (channel.startsWith('markPrice:')) {
+      const mk = this.#marks.get(channel.slice('markPrice:'.length));
+      if (mk !== undefined) this.#sendSnapshot(conn, channel, mk);
     }
   }
 

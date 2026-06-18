@@ -113,6 +113,16 @@ export interface Position {
   margin: bigint;
 }
 
+/** A position enriched with live mark-derived risk fields for display. */
+export interface PositionView extends Position {
+  /** current mark price used for the figures below (1e8 units) */
+  markPrice: bigint;
+  /** signed unrealized PnL at markPrice (1e8 USDC units) */
+  unrealizedPnl: bigint;
+  /** isolated liquidation price, or null when an adverse move can't liquidate it */
+  liquidationPrice: bigint | null;
+}
+
 export interface BookLevel {
   price: bigint;
   qty: bigint;
@@ -166,7 +176,7 @@ export interface Candle {
 export interface AccountSummary {
   address: string;
   balances: Balance[];
-  positions: Position[];
+  positions: PositionView[];
   /** USDC equity = USDC balance + Σ unrealized PnL (1e8 units) */
   perpEquity: bigint;
   /** Σ initial margin in use */

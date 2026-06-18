@@ -4,12 +4,19 @@ import {
   CLEARING_ACCOUNT,
   DexError,
   FEE_ACCOUNT,
+  absBig,
   divRound,
   feeOn,
   mulUnits,
   type Position,
 } from '@dex/shared';
-import { Exchange, maintenanceMargin, tieredMmRate } from '../src/index.js';
+import {
+  Exchange,
+  liquidationPrice,
+  maintenanceMargin,
+  tieredMmRate,
+  unrealizedPnl,
+} from '../src/index.js';
 import { ConservationTracker, PERP, acceptedId, newExchange, rejection, req, trades, u } from './helpers.js';
 
 const M = PERP.id;
@@ -357,6 +364,37 @@ describe('perp engine', () => {
     const aliceEq = usdc(ex, 'alice').available + ex.getPosition('alice', M)!.margin;
     const bobEq = usdc(ex, 'bob').available + ex.getPosition('bob', M)!.margin;
     expect(aliceEq + bobEq + clearing + fee).toBe(u(2022)); // 2×(1000 wallet + 11 margin)
+  });
+
+  it('liquidation price: equity equals maintenance margin at the computed mark (long & short)', () => {
+    const { ex } = setup(10);
+    openPair(ex, u(100), u(1)); // alice long, bob short, margin 10 each
+    for (const user of ['alice', 'bob']) {
+      const pos = ex.getPosition(user, M)!;
+      const liq = liquidationPrice(pos, PERP)!;
+      expect(liq).toBeGreaterThan(0n);
+      const equity = pos.margin + unrealizedPnl(pos, liq);
+      const mm = maintenanceMargin(pos, liq, PERP);
+      // equity exactly meets MM at the liquidation price (within fixed-point rounding)
+      expect(absBig(equity - mm)).toBeLessThanOrEqual(u(1) / 100n); // ≤ 0.01 USDC
+    }
+  });
+
+  it('liquidation price marks the boundary: below liquidates a long, above survives', () => {
+    const { ex, t } = setup(10);
+    openPair(ex, u(100), u(1));
+    const liq = liquidationPrice(ex.getPosition('alice', M)!, PERP)!;
+    ex.setMarkPrice(M, liq + u(2), TS++); // a touch above → long survives
+    expect(ex.getPosition('alice', M)).toBeDefined();
+    ex.setMarkPrice(M, liq - u(1), TS++); // below → long is liquidated by the sweep
+    expect(ex.getPosition('alice', M)).toBeUndefined();
+    t.check(ex);
+  });
+
+  it('a 1x long has no positive liquidation price (margin covers a drop toward zero)', () => {
+    const { ex } = setup(); // leverage 1: margin == notional
+    openPair(ex, u(100), u(1));
+    expect(liquidationPrice(ex.getPosition('alice', M)!, PERP)).toBeNull();
   });
 
   it('insufficient margin rejection uses INSUFFICIENT_MARGIN', () => {

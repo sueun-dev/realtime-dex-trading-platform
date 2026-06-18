@@ -306,6 +306,26 @@ describe('websocket hub', () => {
     probe.close();
   });
 
+  it('markPrice:<mkt> streams perp marks and snapshots the latest to late subscribers', async () => {
+    const probe = new WsProbe(base);
+    await probe.ready();
+    probe.send({ op: 'subscribe', channel: `markPrice:${M2}`, market: M2 });
+
+    await t.svc.pipeline.exec(() => t.svc.engine.setMarkPrice(M2, toUnits('123.5'), Date.now()));
+    const frame = await probe.waitFor((f) => f.channel === `markPrice:${M2}`);
+    expect(frame.data).toMatchObject({ marketId: M2, price: '123.5' });
+
+    // a late subscriber gets the latest mark immediately as a reset snapshot
+    const late = new WsProbe(base);
+    await late.ready();
+    late.send({ op: 'subscribe', channel: `markPrice:${M2}`, market: M2 });
+    const snap = await late.waitFor((f) => f.channel === `markPrice:${M2}`);
+    expect(snap.reset).toBe(true);
+    expect(snap.data).toMatchObject({ marketId: M2, price: '123.5' });
+    probe.close();
+    late.close();
+  });
+
   it('unauthenticated sockets never receive user frames', async () => {
     const probe = new WsProbe(base);
     await probe.ready();
