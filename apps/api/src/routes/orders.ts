@@ -2,7 +2,9 @@ import type { FastifyInstance, preHandlerAsyncHookHandler } from 'fastify';
 import {
   DexError,
   ErrorCodes,
+  absBig,
   divUnits,
+  fromUnits,
   jsonSafe,
   mulDiv,
   mulUnits,
@@ -179,6 +181,11 @@ export function registerOrderRoutes(
     const m = engine.getMarket(p.marketId);
     if (!m) throw new DexError('MARKET_NOT_FOUND', `unknown market ${p.marketId}`);
     if (m.type !== 'perp') throw new DexError('INVALID_ORDER', 'bracket orders require a perp market');
+    // tick-align the exit prices UP FRONT so a misaligned price can never reject
+    // a protective leg after the entry has already opened a position
+    const tpPrice = roundToTick(p.takeProfitPrice, m.tickSize, 'half-up');
+    const slPrice = roundToTick(p.stopLossPrice, m.tickSize, 'half-up');
+    if (tpPrice <= 0n || slPrice <= 0n) throw new DexError('INVALID_ORDER', 'invalid bracket TP/SL price');
 
     // 1. market entry — must fill so the protective legs have a position
     const entryReq: OrderRequest = {
@@ -213,12 +220,12 @@ export function registerOrderRoutes(
     const group = `br-${entryAcc.order.id}`;
     const exitSide = p.side === 'buy' ? 'sell' : 'buy';
     const tpReq: OrderRequest = {
-      marketId: p.marketId, side: exitSide, type: 'limit', price: p.takeProfitPrice,
+      marketId: p.marketId, side: exitSide, type: 'limit', price: tpPrice,
       qty: coverQty, tif: 'GTC', reduceOnly: true, ocoGroup: group,
     };
     const slReq: OrderRequest = {
       marketId: p.marketId, side: exitSide, type: 'market', qty: coverQty, tif: 'IOC', reduceOnly: true,
-      trigger: { price: p.stopLossPrice, direction: p.side === 'buy' ? 'below' : 'above' },
+      trigger: { price: slPrice, direction: p.side === 'buy' ? 'below' : 'above' },
       ocoGroup: group,
     };
     const tpOut = await pipeline.run(() => {
@@ -236,6 +243,16 @@ export function registerOrderRoutes(
     const tpRej = tpOut.find((e) => e.kind === 'orderRejected');
     const slRej = slOut.find((e) => e.kind === 'orderRejected');
     if (tpRej || slRej) {
+      // emergency close uses a WIDE (±50% of ref) reduce-only bound so it sweeps
+      // all available opposite liquidity, not just the ±5% market bound — an
+      // unprotected position must be closed even into a thin book
+      const ref = engine.getMarkPrice(p.marketId) ?? avgFillPrice(entryOut, entryAcc.order.id) ?? 0n;
+      const flattenBound =
+        ref > 0n
+          ? exitSide === 'buy'
+            ? roundToTick(mulDiv(ref, 150n, 100n), m.tickSize, 'floor')
+            : roundToTick(mulDiv(ref, 50n, 100n), m.tickSize, 'ceil')
+          : defaultMarketBound(svc, { marketId: p.marketId, side: exitSide } as OrderRequest);
       await pipeline.exec(() => {
         const evts: EngineEvent[] = [];
         for (const out of [tpOut, slOut]) {
@@ -247,12 +264,22 @@ export function registerOrderRoutes(
         }
         const flatten: OrderRequest = {
           marketId: p.marketId, side: exitSide, type: 'market', qty: coverQty, tif: 'IOC', reduceOnly: true,
-          price: defaultMarketBound(svc, { marketId: p.marketId, side: exitSide } as OrderRequest),
+          price: flattenBound,
         };
         evts.push(...engine.submitOrder(req.userId, flatten, Date.now()));
         return evts;
       });
-      throw new DexError('INVALID_ORDER', `bracket protection failed (${(tpRej ?? slRej)!.reason}); entry was flattened`);
+      const reason = (tpRej ?? slRej)!.reason;
+      // report the TRUE post-flatten state — never claim 'flattened' if liquidity
+      // was too thin to fully close (the client/ops must know it's still exposed)
+      const residual = engine.getPosition(req.userId, p.marketId);
+      if (residual && residual.size !== 0n) {
+        throw new DexError(
+          'INTERNAL',
+          `bracket protection failed (${reason}); could not fully close — ${fromUnits(absBig(residual.size))} ${m.base} still open, place a manual stop`,
+        );
+      }
+      throw new DexError('INVALID_ORDER', `bracket protection failed (${reason}); entry was flattened`);
     }
 
     const legState = (out: EngineEvent[]): unknown => {

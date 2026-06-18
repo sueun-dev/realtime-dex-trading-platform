@@ -86,6 +86,32 @@ describe('bracket orders via the API (gap #6)', () => {
     }
   });
 
+  it('tick-aligns the TP/SL prices up front so a misaligned price never rejects a leg post-entry', async () => {
+    const a = await makeApp();
+    try {
+      const al = await loginAndFund(a.app);
+      const mk = await loginAndFund(a.app);
+      await authed(a.app, al, 'POST', '/api/account/leverage', { marketId: M, leverage: 5 });
+      await authed(a.app, mk, 'POST', '/api/account/leverage', { marketId: M, leverage: 5 });
+      await a.svc.pipeline.exec(() => a.svc.engine.setMarkPrice(M, u(100), Date.now()));
+      await placeOrder(a.app, mk, { marketId: M, side: 'sell', type: 'limit', price: '100', qty: '5', tif: 'GTC' });
+
+      // TEST_PERP tick is 1; misaligned exit prices would have rejected the TP
+      // (TICK_SIZE) AFTER the entry opened — the handler now aligns them up front
+      const res = await authed(a.app, al, 'POST', '/api/bracket', {
+        marketId: M, side: 'buy', qty: '1', takeProfitPrice: '110.7', stopLossPrice: '90.4',
+      });
+      expect(res.statusCode).toBe(200); // no rejection, no flatten
+      const b = res.json() as { takeProfit: { price: string }; stopLoss: { trigger: { price: string } } };
+      expect(b.takeProfit.price).toBe('111'); // 110.7 → tick-aligned
+      expect(b.stopLoss.trigger.price).toBe('90'); // 90.4 → tick-aligned
+      const open = (await authed(a.app, al, 'GET', '/api/orders')).json() as unknown[];
+      expect(open.length).toBe(2); // both protective legs live; position protected
+    } finally {
+      await a.stop();
+    }
+  });
+
   it('rejects a bracket on a spot market (legs are reduce-only / perp-only)', async () => {
     const res = await authed(t.app, alice, 'POST', '/api/bracket', {
       marketId: TEST_SPOT.id,
