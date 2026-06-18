@@ -39,6 +39,7 @@ const BOOK_DEPTH = 20;
 const BOOK_FLUSH_MS = 80;
 const TICKER_FLUSH_MS = 250;
 const TRADE_RING = 200;
+const LIQ_RING = 100;
 /** heartbeat: ping each conn every interval; reap any that didn't speak since the last */
 const HEARTBEAT_MS = 30_000;
 const INTERNAL_ACCOUNTS = new Set([FEE_ACCOUNT, CLEARING_ACCOUNT]);
@@ -65,6 +66,7 @@ export class WsHub implements EventSink {
   readonly #tickers = new Map<string, unknown>();
   readonly #funding = new Map<string, unknown>();
   readonly #marks = new Map<string, unknown>();
+  #liqRing: unknown[] = []; // public anonymized liquidation tape (most-recent-first)
   #tickerQueue = new Map<string, unknown>();
   readonly #dirtyBooks = new Set<string>();
   /** per-channel monotonic frame counter, stamped onto every outbound frame */
@@ -156,6 +158,7 @@ export class WsHub implements EventSink {
   dispatch(events: EngineEvent[]): void {
     const tradesByMarket = new Map<string, Trade[]>();
     const marksByMarket = new Map<string, { marketId: string; price: bigint; ts: number }>();
+    const liqs: { marketId: string; size: bigint; markPrice: bigint; reason: string; ts: number }[] = [];
     const touchedUsers = new Map<string, Set<string>>(); // userId -> event kinds
     const touch = (userId: string, kind: string): void => {
       if (INTERNAL_ACCOUNTS.has(userId)) return;
@@ -200,6 +203,8 @@ export class WsHub implements EventSink {
           break;
         case 'liquidation':
           touch(e.userId, 'liquidation');
+          // public tape is ANONYMIZED — market/size/mark/reason only, no userId
+          liqs.push({ marketId: e.marketId, size: e.size, markPrice: e.markPrice, reason: e.reason, ts: e.ts });
           break;
         case 'fundingApplied':
           touch(e.userId, 'funding');
@@ -215,6 +220,12 @@ export class WsHub implements EventSink {
       const wire = jsonSafe(mark);
       this.#marks.set(marketId, wire);
       this.#broadcast(`markPrice:${marketId}`, wire);
+    }
+
+    if (liqs.length > 0) {
+      const wires = liqs.map((l) => jsonSafe(l));
+      this.#liqRing = [...[...wires].reverse(), ...this.#liqRing].slice(0, LIQ_RING);
+      this.#broadcast('liquidations', wires);
     }
 
     for (const [marketId, trades] of tradesByMarket) {
@@ -269,6 +280,11 @@ export class WsHub implements EventSink {
   /** Latest mark price (wire form) for a market, if one has been broadcast. */
   getMark(marketId: string): unknown {
     return this.#marks.get(marketId);
+  }
+
+  /** Recent anonymized liquidations (most-recent-first) for the public tape. */
+  recentLiquidations(): unknown[] {
+    return this.#liqRing;
   }
 
   recentTrades(marketId: string): unknown[] {
@@ -397,6 +413,8 @@ export class WsHub implements EventSink {
     } else if (channel.startsWith('markPrice:')) {
       const mk = this.#marks.get(channel.slice('markPrice:'.length));
       if (mk !== undefined) this.#sendSnapshot(conn, channel, mk);
+    } else if (channel === 'liquidations') {
+      if (this.#liqRing.length > 0) this.#sendSnapshot(conn, channel, this.#liqRing);
     }
   }
 

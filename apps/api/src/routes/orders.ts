@@ -112,6 +112,33 @@ export function registerOrderRoutes(
     return { ok: true };
   });
 
+  // cancel ALL of a user's open orders, optionally scoped to one market
+  app.delete('/api/orders', { preHandler: authenticate }, async (req) => {
+    const q = req.query as { market?: string };
+    const open = engine.getOpenOrders(req.userId, q.market);
+    let cancelled = 0;
+    for (const o of open) {
+      // a fill between snapshot and cancel makes the id unknown — ignore and continue
+      try {
+        await pipeline.exec(() => engine.cancelOrder(req.userId, o.id, Date.now()));
+        cancelled += 1;
+      } catch {
+        /* already gone */
+      }
+    }
+    return { cancelled };
+  });
+
+  // single order lookup by id (live or historical), ownership-checked
+  app.get('/api/orders/:id', { preHandler: authenticate }, async (req) => {
+    const { id } = req.params as { id: string };
+    const order = engine.getOrder(id) ?? (await repos.orders.byId(id));
+    if (!order || order.userId !== req.userId) {
+      throw new DexError('ORDER_NOT_FOUND', `unknown order ${id}`);
+    }
+    return jsonSafe(order);
+  });
+
   // amend (cancel-replace) a resting GTC limit order's price and/or qty
   app.patch('/api/orders/:id', { preHandler: authenticate }, async (req) => {
     const { id } = req.params as { id: string };
@@ -133,7 +160,16 @@ export function registerOrderRoutes(
   });
 
   app.get('/api/orders', { preHandler: authenticate }, async (req) => {
-    const q = req.query as { status?: string; before?: string; limit?: string };
+    const q = req.query as { status?: string; before?: string; limit?: string; clientOrderId?: string };
+    // lookup by clientOrderId returns the user's matching LIVE order (the id a
+    // client knows before it learns the server-assigned order id)
+    if (q.clientOrderId !== undefined) {
+      const hit = engine
+        .getOpenOrders(req.userId)
+        .find((o) => o.clientOrderId === q.clientOrderId);
+      if (!hit) throw new DexError('ORDER_NOT_FOUND', `no live order with clientOrderId ${q.clientOrderId}`);
+      return jsonSafe(hit);
+    }
     const status = q.status === 'closed' || q.status === 'all' ? q.status : 'open';
     // open orders come live from the engine (source of truth); closed/all history
     // is served from the durable projection with a cursor

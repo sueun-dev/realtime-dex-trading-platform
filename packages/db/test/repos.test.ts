@@ -261,6 +261,43 @@ describe('orders + trades repos', () => {
   });
 });
 
+describe('perpHistory repo (funding + liquidations)', () => {
+  it('fundingForUser + liquidationsForUser: newest first, seq-cursor paginated', async () => {
+    const { projector, repos } = await setup();
+    await projector.applyBatch([
+      positionChanged({
+        seq: 1,
+        ts: 1,
+        userId: ALICE,
+        marketId: PERP,
+        size: SCALE,
+        entryPrice: 100n * SCALE,
+        leverage: 5,
+        margin: 20n * SCALE,
+      }),
+      // a payer settlement (negative → erodes the position above) and a receiver
+      // settlement (positive → wallet credit, no position row needed)
+      { kind: 'fundingApplied', seq: 2, ts: 2, marketId: PERP, userId: ALICE, rate: 1000n, payment: -3n * SCALE, markPrice: 100n * SCALE },
+      { kind: 'fundingApplied', seq: 4, ts: 4, marketId: PERP, userId: ALICE, rate: -500n, payment: 1n * SCALE, markPrice: 99n * SCALE },
+      { kind: 'liquidation', seq: 6, ts: 6, userId: ALICE, marketId: PERP, size: SCALE, markPrice: 60n * SCALE, reason: 'maintenance' },
+      // an unrelated user's funding must never appear in ALICE's history
+      { kind: 'fundingApplied', seq: 7, ts: 7, marketId: PERP, userId: BOB, rate: 1000n, payment: 2n * SCALE, markPrice: 100n * SCALE },
+    ] as EngineEvent[]);
+
+    const funding = await repos.perpHistory.fundingForUser(ALICE);
+    expect(funding.map((f) => f.seq)).toEqual([4, 2]); // newest first, BOB excluded
+    expect(funding[0]!.payment).toBe(1n * SCALE);
+
+    const page = await repos.perpHistory.fundingForUser(ALICE, { beforeSeq: 4, limit: 1 });
+    expect(page.map((f) => f.seq)).toEqual([2]); // cursor skips seq 4
+
+    const liqs = await repos.perpHistory.liquidationsForUser(ALICE);
+    expect(liqs).toHaveLength(1);
+    expect(liqs[0]).toMatchObject({ marketId: PERP, size: SCALE, seq: 6 });
+    expect(await repos.perpHistory.liquidationsForUser(BOB)).toEqual([]);
+  });
+});
+
 describe('loadRestoreState', () => {
   it('returns exactly the projected open orders (asc seq), balances, positions, markPrices, lastSeq', async () => {
     const { projector, repos } = await setup();

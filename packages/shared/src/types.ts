@@ -148,6 +148,28 @@ export interface Ticker {
   ts: number;
 }
 
+/** A funding settlement applied to a user (durable history). */
+export interface FundingPaymentRecord {
+  marketId: string;
+  /** signed 1e8 funding rate at settlement */
+  rate: bigint;
+  /** signed USDC payment applied to the user (negative = paid, positive = received) */
+  payment: bigint;
+  markPrice: bigint;
+  seq: number;
+  ts: number;
+}
+
+/** A force-close of one of a user's positions (durable history). */
+export interface LiquidationRecord {
+  marketId: string;
+  /** signed position size that was force-closed */
+  size: bigint;
+  markPrice: bigint;
+  seq: number;
+  ts: number;
+}
+
 export interface FundingInfo {
   marketId: string;
   /** funding rate for one interval, 1e8 units (0.0001 → 1e4); sign = longs pay shorts when positive */

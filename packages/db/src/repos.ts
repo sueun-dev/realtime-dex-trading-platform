@@ -9,6 +9,8 @@ import type {
   Balance,
   Candle,
   CandleInterval,
+  FundingPaymentRecord,
+  LiquidationRecord,
   MarketConfig,
   Order,
   Position,
@@ -300,6 +302,55 @@ export function createRepos(db: Db) {
     },
   };
 
+  const perpHistory = {
+    /** A user's funding settlements, most recent first, seq-cursor paginated. */
+    async fundingForUser(
+      userId: string,
+      opts: { beforeSeq?: number; limit?: number } = {},
+    ): Promise<FundingPaymentRecord[]> {
+      const limit = Math.max(1, Math.min(200, opts.limit ?? 100));
+      const conds = [eq(s.fundingPayments.userId, userId)];
+      if (opts.beforeSeq !== undefined) conds.push(lt(s.fundingPayments.seq, opts.beforeSeq));
+      const rows = await db
+        .select()
+        .from(s.fundingPayments)
+        .where(and(...conds))
+        .orderBy(desc(s.fundingPayments.seq))
+        .limit(limit);
+      return rows.map((r) => ({
+        marketId: r.marketId,
+        rate: r.rate,
+        payment: r.payment,
+        markPrice: r.markPrice,
+        seq: r.seq,
+        ts: r.ts,
+      }));
+    },
+
+    /** A user's liquidation history, most recent first, seq-cursor paginated. */
+    async liquidationsForUser(
+      userId: string,
+      opts: { beforeSeq?: number; limit?: number } = {},
+    ): Promise<LiquidationRecord[]> {
+      const limit = Math.max(1, Math.min(200, opts.limit ?? 100));
+      const conds = [eq(s.liquidations.userId, userId)];
+      if (opts.beforeSeq !== undefined) conds.push(lt(s.liquidations.seq, opts.beforeSeq));
+      const rows = await db
+        .select()
+        .from(s.liquidations)
+        .where(and(...conds))
+        .orderBy(desc(s.liquidations.seq))
+        .limit(limit);
+      return rows.map((r) => ({
+        marketId: r.marketId,
+        size: r.size,
+        markPrice: r.markPrice,
+        seq: r.seq,
+        ts: r.ts,
+      }));
+    },
+  };
+
   const positions = {
     async forUser(userId: string): Promise<Position[]> {
       const rows = await db
@@ -579,6 +630,7 @@ export function createRepos(db: Db) {
     balances,
     orders,
     trades,
+    perpHistory,
     positions,
     leverage,
     nonces,

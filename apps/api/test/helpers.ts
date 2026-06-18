@@ -129,6 +129,7 @@ export interface OrderBody {
   reduceOnly?: boolean;
   triggerPrice?: string;
   triggerDirection?: 'above' | 'below';
+  clientOrderId?: string;
 }
 
 export async function placeOrder(

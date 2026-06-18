@@ -35,4 +35,24 @@ export function registerAccountRoutes(
     await pipeline.runDb(() => repos.leverage.set(req.userId, marketId, leverage));
     return { ok: true };
   });
+
+  // a user's funding-payment history (paid/received), seq-cursor paginated
+  app.get('/api/account/funding', { preHandler: authenticate }, async (req) => {
+    const q = req.query as { before?: string; limit?: string };
+    const rows = await repos.perpHistory.fundingForUser(req.userId, {
+      ...(q.before !== undefined ? { beforeSeq: Number(q.before) } : {}),
+      ...(q.limit !== undefined ? { limit: Number(q.limit) } : {}),
+    });
+    return jsonSafe(rows);
+  });
+
+  // a user's liquidation history, seq-cursor paginated
+  app.get('/api/account/liquidations', { preHandler: authenticate }, async (req) => {
+    const q = req.query as { before?: string; limit?: string };
+    const rows = await repos.perpHistory.liquidationsForUser(req.userId, {
+      ...(q.before !== undefined ? { beforeSeq: Number(q.before) } : {}),
+      ...(q.limit !== undefined ? { limit: Number(q.limit) } : {}),
+    });
+    return jsonSafe(rows);
+  });
 }

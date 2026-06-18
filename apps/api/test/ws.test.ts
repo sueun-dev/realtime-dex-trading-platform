@@ -4,6 +4,7 @@ import { toUnits } from '@dex/shared';
 import {
   TEST_PERP,
   TEST_SPOT,
+  authed,
   loginAndFund,
   makeApp,
   placeOrder,
@@ -324,6 +325,27 @@ describe('websocket hub', () => {
     expect(snap.data).toMatchObject({ marketId: M2, price: '123.5' });
     probe.close();
     late.close();
+  });
+
+  it('liquidations channel broadcasts an anonymized public tape (no userId)', async () => {
+    const probe = new WsProbe(base);
+    await probe.ready();
+    probe.send({ op: 'subscribe', channel: 'liquidations' });
+
+    // alice opens a 5x long on the perp, bob takes the other side
+    await authed(t.app, alice, 'POST', '/api/account/leverage', { marketId: M2, leverage: 5 });
+    await placeOrder(t.app, bob, { marketId: M2, side: 'sell', type: 'limit', price: '100', qty: '1', tif: 'GTC' });
+    await placeOrder(t.app, alice, { marketId: M2, side: 'buy', type: 'limit', price: '100', qty: '1', tif: 'GTC' });
+    // crater the mark → alice is force-closed
+    await t.svc.pipeline.exec(() => t.svc.engine.setMarkPrice(M2, toUnits('50'), Date.now()));
+
+    const frame = await probe.waitFor((f) => f.channel === 'liquidations');
+    const rows = frame.data as Record<string, unknown>[];
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(rows[0]).toMatchObject({ marketId: M2 });
+    expect(rows[0]).toHaveProperty('markPrice');
+    expect(rows[0]).not.toHaveProperty('userId'); // privacy: public tape is anonymized
+    probe.close();
   });
 
   it('unauthenticated sockets never receive user frames', async () => {
