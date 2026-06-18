@@ -163,6 +163,20 @@ export const liquidations = pgTable('liquidations', {
   ts: bigint('ts', { mode: 'number' }).notNull(),
 });
 
+export const realizedPnlEvents = pgTable(
+  'realized_pnl_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    userId: text('user_id').notNull(),
+    marketId: text('market_id').notNull(),
+    /** signed realized PnL delta booked by a position change (1e8 USDC units) */
+    amount: money('amount').notNull(),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    ts: bigint('ts', { mode: 'number' }).notNull(),
+  },
+  (t) => [index('realized_pnl_user_seq_idx').on(t.userId, t.seq)],
+);
+
 export const authNonces = pgTable(
   'auth_nonces',
   {

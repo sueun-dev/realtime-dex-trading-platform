@@ -11,6 +11,7 @@ const EXPECTED_TABLES = [
   'meta',
   'orders',
   'positions',
+  'realized_pnl_events',
   'trades',
   'user_market_leverage',
   'users',
@@ -40,6 +41,7 @@ describe('migrations', () => {
       'orders_market_seq_idx',
       'orders_market_status_idx',
       'orders_user_status_idx',
+      'realized_pnl_user_seq_idx',
       'trades_market_seq_idx',
     ]);
   });

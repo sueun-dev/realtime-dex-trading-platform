@@ -160,6 +160,21 @@ export interface FundingPaymentRecord {
   ts: number;
 }
 
+/** A realized-PnL booking (close / reduce / liquidation / ADL). */
+export interface RealizedPnlRecord {
+  marketId: string;
+  /** signed realized PnL delta, 1e8 USDC units */
+  amount: bigint;
+  seq: number;
+  ts: number;
+}
+
+/** Cumulative realized PnL for a user, total and per market. */
+export interface RealizedPnlSummary {
+  total: bigint;
+  byMarket: { marketId: string; amount: bigint }[];
+}
+
 /** A force-close of one of a user's positions (durable history). */
 export interface LiquidationRecord {
   marketId: string;

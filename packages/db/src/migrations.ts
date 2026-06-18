@@ -126,6 +126,16 @@ CREATE TABLE IF NOT EXISTS liquidations (
   ts bigint NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS realized_pnl_events (
+  id bigserial PRIMARY KEY,
+  user_id text NOT NULL,
+  market_id text NOT NULL,
+  amount numeric(38,0) NOT NULL,
+  seq bigint NOT NULL,
+  ts bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS realized_pnl_user_seq_idx ON realized_pnl_events (user_id, seq);
+
 CREATE TABLE IF NOT EXISTS auth_nonces (
   address text NOT NULL,
   nonce text NOT NULL,

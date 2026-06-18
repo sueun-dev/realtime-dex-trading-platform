@@ -14,6 +14,8 @@ import type {
   MarketConfig,
   Order,
   Position,
+  RealizedPnlRecord,
+  RealizedPnlSummary,
   Trade,
 } from '@dex/shared';
 import type { Db } from './client.js';
@@ -327,6 +329,39 @@ export function createRepos(db: Db) {
       }));
     },
 
+    /** A user's realized-PnL tape, most recent first, seq-cursor paginated. */
+    async realizedPnlForUser(
+      userId: string,
+      opts: { beforeSeq?: number; limit?: number } = {},
+    ): Promise<RealizedPnlRecord[]> {
+      const limit = Math.max(1, Math.min(200, opts.limit ?? 100));
+      const conds = [eq(s.realizedPnlEvents.userId, userId)];
+      if (opts.beforeSeq !== undefined) conds.push(lt(s.realizedPnlEvents.seq, opts.beforeSeq));
+      const rows = await db
+        .select()
+        .from(s.realizedPnlEvents)
+        .where(and(...conds))
+        .orderBy(desc(s.realizedPnlEvents.seq))
+        .limit(limit);
+      return rows.map((r) => ({ marketId: r.marketId, amount: r.amount, seq: r.seq, ts: r.ts }));
+    },
+
+    /** Cumulative realized PnL for a user: grand total + per-market totals. */
+    async realizedPnlSummary(userId: string): Promise<RealizedPnlSummary> {
+      const rows = await db
+        .select({
+          marketId: s.realizedPnlEvents.marketId,
+          amount: sql<string>`sum(${s.realizedPnlEvents.amount})`,
+        })
+        .from(s.realizedPnlEvents)
+        .where(eq(s.realizedPnlEvents.userId, userId))
+        .groupBy(s.realizedPnlEvents.marketId)
+        .orderBy(asc(s.realizedPnlEvents.marketId));
+      const byMarket = rows.map((r) => ({ marketId: r.marketId, amount: BigInt(r.amount) }));
+      const total = byMarket.reduce((a, b) => a + b.amount, 0n);
+      return { total, byMarket };
+    },
+
     /** A user's liquidation history, most recent first, seq-cursor paginated. */
     async liquidationsForUser(
       userId: string,
@@ -501,7 +536,7 @@ export function createRepos(db: Db) {
    */
   /** Rolling cap: delete all but the most-recent `keep` rows, ordered by `seq`. */
   async function trimBySeq(
-    table: typeof s.trades | typeof s.fundingPayments | typeof s.liquidations,
+    table: typeof s.trades | typeof s.fundingPayments | typeof s.liquidations | typeof s.realizedPnlEvents,
     keep: number,
   ): Promise<number> {
     const cutoff = await db
@@ -526,7 +561,7 @@ export function createRepos(db: Db) {
       tradesKeep: number;
       /** keep only the most recent N funding / liquidation rows */
       eventsKeep: number;
-    }): Promise<{ orders: number; trades: number; funding: number; liquidations: number }> {
+    }): Promise<{ orders: number; trades: number; funding: number; liquidations: number; realizedPnl: number }> {
       // Only the book MIRROR's terminal orders are pruned (it requotes ~thousands/min
       // and is the sole source of unbounded growth). Real users' terminal orders are
       // kept so order history stays available — users place comparatively nothing.
@@ -545,6 +580,7 @@ export function createRepos(db: Db) {
         trades: await trimBySeq(s.trades, opts.tradesKeep),
         funding: await trimBySeq(s.fundingPayments, opts.eventsKeep),
         liquidations: await trimBySeq(s.liquidations, opts.eventsKeep),
+        realizedPnl: await trimBySeq(s.realizedPnlEvents, opts.eventsKeep),
       };
     },
   };

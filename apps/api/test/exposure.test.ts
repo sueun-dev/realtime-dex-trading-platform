@@ -99,4 +99,22 @@ describe('funding + liquidation history (gaps #9, #10)', () => {
     expect(rows.length).toBeGreaterThanOrEqual(1);
     expect(rows[0]!.marketId).toBe(PERP);
   });
+
+  it('exposes realized PnL summary + tape via /api/account/pnl (gap #1)', async () => {
+    // the liquidation above crystallized realized PnL for alice on the perp
+    const summary = (await authed(t.app, alice, 'GET', '/api/account/pnl')).json() as {
+      total: string;
+      byMarket: { marketId: string; amount: string }[];
+    };
+    expect(typeof summary.total).toBe('string');
+    expect(summary.byMarket.some((m) => m.marketId === PERP)).toBe(true);
+
+    const tape = (await authed(t.app, alice, 'GET', '/api/account/pnl?tape=1')).json() as {
+      marketId: string;
+      amount: string;
+    }[];
+    expect(tape.length).toBeGreaterThanOrEqual(1);
+    expect(tape[0]).toHaveProperty('amount');
+    expect(tape.some((r) => r.marketId === PERP)).toBe(true);
+  });
 });

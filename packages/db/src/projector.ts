@@ -175,6 +175,20 @@ async function applyBalanceChanged(ex: DbExecutor, e: BalanceChangedEvent): Prom
 }
 
 async function applyPositionChanged(ex: DbExecutor, e: PositionChangedEvent): Promise<void> {
+  // Book realized PnL whenever a change crystallizes one — from a partial reduce,
+  // a full close (size 0), a liquidation, or ADL (all emit positionChanged with
+  // realizedPnl). Inserted BEFORE the close early-return below, since a full
+  // close is exactly when realized PnL is largest. Idempotent under replay via
+  // the projector's seq watermark.
+  if (e.realizedPnl !== 0n) {
+    await ex.insert(s.realizedPnlEvents).values({
+      userId: e.userId,
+      marketId: e.marketId,
+      amount: e.realizedPnl,
+      seq: e.seq,
+      ts: e.ts,
+    });
+  }
   if (e.size === 0n) {
     await ex
       .delete(s.positions)

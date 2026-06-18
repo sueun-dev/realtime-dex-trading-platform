@@ -296,6 +296,31 @@ describe('perpHistory repo (funding + liquidations)', () => {
     expect(liqs[0]).toMatchObject({ marketId: PERP, size: SCALE, seq: 6 });
     expect(await repos.perpHistory.liquidationsForUser(BOB)).toEqual([]);
   });
+
+  it('realized PnL: booked from positionChanged deltas (incl. full close at size 0)', async () => {
+    const { projector, repos } = await setup();
+    await projector.applyBatch([
+      // open (no realized), partial reduce (+30), full close at size 0 (-10), zero (skipped)
+      positionChanged({ seq: 1, ts: 1, userId: ALICE, marketId: PERP, size: 2n * SCALE, entryPrice: 100n * SCALE, leverage: 5, margin: 40n * SCALE, realizedPnl: 0n }),
+      positionChanged({ seq: 2, ts: 2, userId: ALICE, marketId: PERP, size: SCALE, entryPrice: 100n * SCALE, leverage: 5, margin: 20n * SCALE, realizedPnl: 30n * SCALE }),
+      positionChanged({ seq: 3, ts: 3, userId: ALICE, marketId: SPOT, size: SCALE, entryPrice: 10n * SCALE, leverage: 1, margin: 10n * SCALE, realizedPnl: 7n * SCALE }),
+      positionChanged({ seq: 4, ts: 4, userId: ALICE, marketId: PERP, size: 0n, entryPrice: 0n, leverage: 5, margin: 0n, realizedPnl: -10n * SCALE }),
+    ] as EngineEvent[]);
+
+    // tape: newest first, the realizedPnl==0 open is NOT booked
+    const tape = await repos.perpHistory.realizedPnlForUser(ALICE);
+    expect(tape.map((r) => r.seq)).toEqual([4, 3, 2]);
+    expect(tape.map((r) => r.amount)).toEqual([-10n * SCALE, 7n * SCALE, 30n * SCALE]);
+
+    // summary: grand total + per-market
+    const summary = await repos.perpHistory.realizedPnlSummary(ALICE);
+    expect(summary.total).toBe(27n * SCALE); // 30 - 10 + 7
+    expect(summary.byMarket).toEqual([
+      { marketId: PERP, amount: 20n * SCALE }, // 30 - 10
+      { marketId: SPOT, amount: 7n * SCALE },
+    ]);
+    expect(await repos.perpHistory.realizedPnlSummary(BOB)).toEqual({ total: 0n, byMarket: [] });
+  });
 });
 
 describe('loadRestoreState', () => {

@@ -46,6 +46,20 @@ export function registerAccountRoutes(
     return jsonSafe(rows);
   });
 
+  // cumulative realized PnL: total + per-market by default; the booking tape
+  // with ?tape=1 (seq-cursor paginated)
+  app.get('/api/account/pnl', { preHandler: authenticate }, async (req) => {
+    const q = req.query as { tape?: string; before?: string; limit?: string };
+    if (q.tape !== undefined) {
+      const rows = await repos.perpHistory.realizedPnlForUser(req.userId, {
+        ...(q.before !== undefined ? { beforeSeq: Number(q.before) } : {}),
+        ...(q.limit !== undefined ? { limit: Number(q.limit) } : {}),
+      });
+      return jsonSafe(rows);
+    }
+    return jsonSafe(await repos.perpHistory.realizedPnlSummary(req.userId));
+  });
+
   // a user's liquidation history, seq-cursor paginated
   app.get('/api/account/liquidations', { preHandler: authenticate }, async (req) => {
     const q = req.query as { before?: string; limit?: string };
