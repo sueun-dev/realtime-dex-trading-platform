@@ -140,9 +140,12 @@ describe('websocket hub', () => {
       const d = f.data as { fills?: unknown[] };
       return Array.isArray(d.fills) && d.fills.length > 0;
     });
-    const d = userFrame.data as { type: string; fills: { price: string; qty: string }[] };
+    const d = userFrame.data as { type: string; fills: Record<string, unknown>[] };
     expect(d.type).toContain('fill');
-    expect(d.fills[0]).toMatchObject({ price: '100', qty: '0.2' });
+    expect(d.fills[0]).toMatchObject({ price: '100', qty: '0.2', role: 'taker', side: 'buy' });
+    // privacy: the per-user fill view never leaks the counterparty's identity
+    expect(d.fills[0]).not.toHaveProperty('makerUserId');
+    expect(d.fills[0]).not.toHaveProperty('takerUserId');
     probe.close();
   });
 

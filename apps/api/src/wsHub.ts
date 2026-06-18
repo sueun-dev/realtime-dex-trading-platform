@@ -44,6 +44,27 @@ const LIQ_RING = 100;
 const HEARTBEAT_MS = 30_000;
 const INTERNAL_ACCOUNTS = new Set([FEE_ACCOUNT, CLEARING_ACCOUNT]);
 
+/**
+ * One user's view of a trade — their side/role/fee, with NO counterparty userId
+ * (the raw Trade carries both makerUserId and takerUserId, which must never be
+ * shipped to the other party). Mirrors the REST /api/fills projection.
+ */
+function userFill(t: Trade, userId: string): unknown {
+  const isTaker = t.takerUserId === userId;
+  const side = isTaker ? t.takerSide : t.takerSide === 'buy' ? 'sell' : 'buy';
+  return jsonSafe({
+    id: t.id,
+    marketId: t.marketId,
+    price: t.price,
+    qty: t.qty,
+    side,
+    takerSide: t.takerSide,
+    role: isTaker ? 'taker' : 'maker',
+    fee: isTaker ? t.takerFee : t.makerFee,
+    ts: t.ts,
+  });
+}
+
 /** Per-user accumulator for one dispatch batch — the changed entities the user
  * channel ships so a client can update without a full refetch. */
 interface UserBucket {
@@ -196,8 +217,10 @@ export class WsHub implements EventSink {
           }
           list.push(e.trade);
           this.#dirtyBooks.add(e.trade.marketId);
-          touch(e.trade.makerUserId, 'fill')?.fills.push(jsonSafe(e.trade));
-          touch(e.trade.takerUserId, 'fill')?.fills.push(jsonSafe(e.trade));
+          // ship each side a PRIVATE fill view (no counterparty userId leaked),
+          // mirroring the REST /api/fills projection
+          touch(e.trade.makerUserId, 'fill')?.fills.push(userFill(e.trade, e.trade.makerUserId));
+          touch(e.trade.takerUserId, 'fill')?.fills.push(userFill(e.trade, e.trade.takerUserId));
           break;
         }
         case 'orderAccepted':
